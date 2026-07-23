@@ -1,0 +1,42 @@
+# Dependencies & build
+node_modules/
+dist/
+out/
+*.exe
+*.blockmap
+*.nsis.7z
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs / PID
+*.log
+.codex-dev.*
+
+# Runtime data (keep folder READMEs via !)
+cache/*
+!cache/README.md
+chats/*
+!chats/README.md
+models/*
+!models/README.md
+plugins/*
+!plugins/README.md
+
+# Large local model weights if placed in repo root accidentally
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.onnx
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
