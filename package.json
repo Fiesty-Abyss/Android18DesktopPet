@@ -11,7 +11,8 @@
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "npm run build && node scripts/package-win.mjs",
-    "dist:builder": "npm run build && electron-builder"
+    "dist:builder": "npm run build && electron-builder --config electron-builder.config.cjs",
+    "dist:lite": "npm run build && cross-env A18_NO_CUDA=1 electron-builder --config electron-builder.config.cjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -22,57 +23,13 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "cross-env": "^10.1.0",
     "electron": "^44.7.0",
     "electron-builder": "^26.17.0",
     "electron-vite": "^4.0.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.4",
     "vitest": "^5.0.3"
-  },
-  "build": {
-    "appId": "com.local.android18.desktoppet",
-    "productName": "Android 18 Desktop Pet",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "files": [
-      "out/**/*"
-    ],
-    "win": {
-      "target": [
-        "portable",
-        "nsis"
-      ]
-    },
-    "icon": "assets/icon.png",
-    "extraFiles": [
-      {
-        "from": "character-cards",
-        "to": "character-cards",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "plugins",
-        "to": "plugins",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "models/README.md",
-        "to": "models/README.md"
-      }
-    ],
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Utility"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
   },
   "license": "MIT",
   "author": "Fiesty-Abyss",
