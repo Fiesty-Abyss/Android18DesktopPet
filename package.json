@@ -64,5 +64,11 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "license": "MIT",
+  "author": "Fiesty-Abyss",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fiesty-Abyss/Android18DesktopPet.git"
   }
 }
