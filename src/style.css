@@ -426,7 +426,7 @@ textarea {
   background-image: var(--character-bg);
   background-position: center;
   background-size: cover;
-  opacity: 0.16;
+  opacity: 0.42;
   filter: saturate(0.96);
 }
 
@@ -435,7 +435,8 @@ textarea {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.82));
+  /* 左侧（台词编辑区）保持高对比，右侧透出更多角色立绘 */
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.55));
 }
 
 .settings-section[hidden] {
