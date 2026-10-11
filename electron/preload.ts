@@ -1,14 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  CardImportResult,
   CharacterCardInfo,
   ChatMessage,
   ConfigPatch,
+  FileActionResult,
   LocalModelInfo,
   LocalStatus,
   RendererConfig,
   WorkspaceDirKey
 } from '../shared/types'
+import type { PluginListResult, PluginMessage } from '../shared/plugin-types'
 
 function subscribe(channel: string, callback: () => void): () => void {
   const listener = () => callback()
@@ -29,6 +32,18 @@ const petAPI = {
   scanCharacterCards: () => ipcRenderer.invoke('pet:scan-character-cards') as Promise<CharacterCardInfo[]>,
   selectCharacterCard: (characterId: string) =>
     ipcRenderer.invoke('pet:select-character-card', characterId) as Promise<RendererConfig>,
+  importCharacterCards: () => ipcRenderer.invoke('pet:import-character-cards') as Promise<CardImportResult>,
+  exportCharacterPng: () => ipcRenderer.invoke('pet:export-character-png') as Promise<FileActionResult>,
+  listPlugins: () => ipcRenderer.invoke('pet:list-plugins') as Promise<PluginListResult>,
+  reloadPlugins: () => ipcRenderer.invoke('pet:reload-plugins') as Promise<PluginListResult>,
+  setPluginEnabled: (id: string, enabled: boolean) =>
+    ipcRenderer.invoke('pet:set-plugin-enabled', id, enabled) as Promise<PluginListResult>,
+  runPluginCommand: (input: string) => ipcRenderer.invoke('pet:run-plugin-command', input) as Promise<string | null>,
+  onPluginMessage: (callback: (message: PluginMessage) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, message: PluginMessage) => callback(message)
+    ipcRenderer.on('pet:plugin-message', listener)
+    return () => ipcRenderer.removeListener('pet:plugin-message', listener)
+  },
   selectModelImage: () => ipcRenderer.invoke('pet:select-model-image') as Promise<RendererConfig>,
   getModelImage: () => ipcRenderer.invoke('pet:get-model-image') as Promise<string | null>,
   getCharacterBackground: () => ipcRenderer.invoke('pet:get-character-background') as Promise<string | null>,

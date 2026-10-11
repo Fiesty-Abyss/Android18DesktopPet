@@ -1,16 +1,18 @@
 {
   "name": "android-18-desktop-pet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Electron 透明桌宠 + AI 对话：云端 API / 本地 GGUF、角色卡、好感度、对话模拟。",
   "main": "out/main/main.js",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "npm run build && node scripts/package-win.mjs",
-    "dist:builder": "npm run build && electron-builder"
+    "dist:builder": "npm run build && electron-builder --config electron-builder.config.cjs",
+    "dist:lite": "npm run build && cross-env A18_NO_CUDA=1 electron-builder --config electron-builder.config.cjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -21,48 +23,21 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "electron": "^39.2.6",
-    "electron-builder": "^26.0.12",
+    "cross-env": "^10.1.0",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.17.0",
     "electron-vite": "^4.0.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^4.1.11"
   },
-  "build": {
-    "appId": "com.local.android18.desktoppet",
-    "productName": "Android 18 Desktop Pet",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "files": [
-      "out/**/*"
-    ],
-    "win": {
-      "target": [
-        "portable",
-        "nsis"
-      ]
-    },
-    "icon": "assets/icon.png",
-    "extraFiles": [
-      {
-        "from": "character-cards",
-        "to": "character-cards",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "models/README.md",
-        "to": "models/README.md"
-      }
-    ],
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Utility"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
+  "license": "MIT",
+  "author": "Fiesty-Abyss",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fiesty-Abyss/Android18DesktopPet.git"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

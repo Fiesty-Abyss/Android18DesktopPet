@@ -1,5 +1,27 @@
 # 更新日志
 
+## 0.3.0
+
+### 新功能
+
+- **声明式插件系统**：`plugins/<id>/plugin.json` 支持按时段问候、定时提醒（every / at）、闲聊、快捷命令和追加系统提示词；插件只含数据、不执行代码。设置面板可逐个启用 / 停用、重新加载，`/help` 列出命令，窗口隐藏时提醒走系统通知
+- 附带示例插件 `daily-greetings`（默认启用）与 `health-reminders`（默认关闭），以及 [插件开发文档](plugins/README.md)
+- **SillyTavern PNG 角色卡**：读取 PNG 中 `tEXt` / `iTXt` / `zTXt` 的 `ccv3`（V3）与 `chara`（V2）角色卡，只有 PNG 的卡也能直接使用
+- 设置面板新增「导入角色卡…」（多选 JSON / PNG）与「导出为 PNG 角色卡」（同时写入 V2 + V3，导回时无损）
+
+### 改进
+
+- 升级到 Electron 44、electron-builder 26.17、node-llama-cpp 3.22，`npm audit` 告警 30 → 12（剩余均不在运行时路径上）
+- 安装包只带目标平台的 node-llama-cpp 二进制，去掉 llama.cpp 源码包；新增 `npm run dist:lite`（不含 CUDA）。Linux 解包体积 1004 MB → 937 MB / 399 MB（lite）
+- Windows 绿色版脚本只复制生产依赖，不再把本机模型权重和聊天记录打进去
+
+### 其它
+
+- 采用 MIT 许可证（模型与角色卡素材的许可证各自独立）
+- 引入 vitest 单元测试（`npm test`），覆盖 PNG 角色卡读写与插件校验 / 调度
+- GitHub Actions：CI（Ubuntu + Windows 上 typecheck / 测试 / 构建）与 Release 工作流（自动构建 Windows 安装包）
+- Issue / PR 模板
+
 ## 0.2.0
 
 ### 新功能

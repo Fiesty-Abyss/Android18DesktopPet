@@ -24,6 +24,9 @@ models/*
 !models/README.md
 plugins/*
 !plugins/README.md
+# 随项目附带的示例插件
+!plugins/daily-greetings/
+!plugins/health-reminders/
 
 # Large local model weights if placed in repo root accidentally
 *.gguf

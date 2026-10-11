@@ -8,6 +8,7 @@ import type {
   RendererConfig,
   WorkspaceDirKey
 } from '../shared/types'
+import type { PluginListResult } from '../shared/plugin-types'
 import bundledPetImage from '../assets/android18-chibi.png'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -92,6 +93,10 @@ app.innerHTML = `
             </label>
             <button class="secondary-button" id="refresh-character-cards" type="button">刷新角色库</button>
             <button class="secondary-button" id="open-card-folder" type="button">打开目录</button>
+          </div>
+          <div class="inline-actions">
+            <button class="secondary-button" id="import-character-cards" type="button">导入角色卡…</button>
+            <button class="secondary-button" id="export-character-png" type="button">导出为 PNG 角色卡</button>
           </div>
           <p class="hint-text" id="character-card-hint"></p>
         </section>
@@ -203,6 +208,16 @@ app.innerHTML = `
             <span class="status-text" id="local-status">本地运行时未加载</span>
             <button class="secondary-button" id="unload-local-model" type="button">卸载本地模型</button>
           </div>
+        </section>
+
+        <section class="settings-section plugin-section">
+          <div class="plugin-header">
+            <strong>插件</strong>
+            <span class="hint-text">声明式插件，只包含 JSON 数据，不执行代码。聊天框输入 /help 查看命令。</span>
+            <button class="secondary-button" id="reload-plugins" type="button">重新加载</button>
+            <button class="secondary-button" id="open-plugin-folder" type="button">打开目录</button>
+          </div>
+          <div class="plugin-list" id="plugin-list"></div>
         </section>
 
         <div class="settings-grid">
@@ -340,6 +355,11 @@ const localUseMmap = document.querySelector<HTMLInputElement>('#local-use-mmap')
 const localUseMlock = document.querySelector<HTMLInputElement>('#local-use-mlock')!
 const localSharedMemory = document.querySelector<HTMLInputElement>('#local-shared-memory')!
 const openCardFolder = document.querySelector<HTMLButtonElement>('#open-card-folder')!
+const importCharacterCardsButton = document.querySelector<HTMLButtonElement>('#import-character-cards')!
+const exportCharacterPngButton = document.querySelector<HTMLButtonElement>('#export-character-png')!
+const pluginList = document.querySelector<HTMLDivElement>('#plugin-list')!
+const reloadPluginsButton = document.querySelector<HTMLButtonElement>('#reload-plugins')!
+const openPluginFolder = document.querySelector<HTMLButtonElement>('#open-plugin-folder')!
 const openModelFolder = document.querySelector<HTMLButtonElement>('#open-model-folder')!
 const exportHistory = document.querySelector<HTMLButtonElement>('#export-history')!
 const openChatFolder = document.querySelector<HTMLButtonElement>('#open-chat-folder')!
@@ -602,7 +622,7 @@ function renderCharacterCards(): void {
     const parts = [
       card.source === 'builtin' ? '内置' : '角色库',
       card.hasJson ? 'JSON' : '',
-      card.hasPng ? 'PNG' : ''
+      card.hasPng ? (card.embeddedSpec ? `PNG 卡 ${card.embeddedSpec.toUpperCase()}` : 'PNG') : ''
     ].filter(Boolean)
     characterSourceSelect.add(new Option(`${card.name} · ${parts.join(' / ')}`, card.id))
   }
@@ -628,7 +648,14 @@ function updateCharacterHint(): void {
     characterCardHint.textContent = '角色库未刷新，或当前角色卡文件不存在。'
     return
   }
-  const fileState = selected.hasJson && selected.hasPng ? 'JSON 和 PNG 已配对' : selected.hasJson ? '只有 JSON' : '只有 PNG'
+  const fileState =
+    selected.hasJson && selected.hasPng
+      ? 'JSON 和 PNG 已配对（设定取自 JSON）'
+      : selected.hasJson
+        ? '只有 JSON'
+        : selected.embeddedSpec
+          ? `PNG 内嵌 ${selected.embeddedSpec.toUpperCase()} 角色卡`
+          : '只有 PNG（没有内嵌设定，仅作背景）'
   characterCardHint.textContent = `${selected.baseName} · ${fileState}。模拟对话模式会自动使用 PNG 背景；桌宠模式只使用角色设定。`
 }
 
@@ -693,7 +720,47 @@ async function adjustScale(delta: number): Promise<void> {
   applyConfig(next)
 }
 
+function renderPlugins(result: PluginListResult): void {
+  const rows = result.plugins.map((plugin) => {
+    const parts = [
+      plugin.summary.greetings ? `问候 ${plugin.summary.greetings}` : '',
+      plugin.summary.reminders ? `提醒 ${plugin.summary.reminders}` : '',
+      plugin.summary.idle ? '闲聊' : '',
+      plugin.summary.commands.length ? `命令 ${plugin.summary.commands.join(' ')}` : '',
+      plugin.summary.systemPrompt ? '提示词' : ''
+    ].filter(Boolean)
+    return `
+      <label class="plugin-item">
+        <input type="checkbox" data-plugin-id="${escapeHtml(plugin.id)}" ${plugin.enabled ? 'checked' : ''} />
+        <span class="plugin-body">
+          <span class="plugin-title">${escapeHtml(plugin.name)} <small>v${escapeHtml(plugin.version)}${plugin.author ? ` · ${escapeHtml(plugin.author)}` : ''}</small></span>
+          <span class="plugin-desc">${escapeHtml(plugin.description || '（无描述）')}</span>
+          <span class="plugin-tags">${parts.map((part) => `<em>${escapeHtml(part)}</em>`).join('')}</span>
+        </span>
+      </label>
+    `
+  })
+  const errors = result.errors.map(
+    (error) => `<p class="plugin-error">加载失败：${escapeHtml(error.dir)} — ${escapeHtml(error.message)}</p>`
+  )
+  pluginList.innerHTML =
+    rows.join('') + errors.join('') || '<p class="hint-text">plugins/ 目录里还没有插件。参考 plugins/README.md 编写 plugin.json。</p>'
+}
+
+async function refreshPlugins(reload = false): Promise<void> {
+  renderPlugins(reload ? await window.pet.reloadPlugins() : await window.pet.listPlugins())
+}
+
 async function ask(text: string): Promise<void> {
+  const commandReply = await window.pet.runPluginCommand(text)
+  if (commandReply !== null) {
+    // 插件命令只在气泡里回应，不发给模型、不写进聊天记忆
+    setMood('happy')
+    say(commandReply)
+    window.setTimeout(() => setMood('idle'), 1300)
+    return
+  }
+
   const userMessage: ChatMessage = { role: 'user', content: text }
   messages.push(userMessage)
   await persist()
@@ -750,6 +817,7 @@ function openSettings(): void {
   settingsStatus.dataset.kind = ''
   void refreshLocalModels()
   void refreshLocalStatus()
+  void refreshPlugins()
   window.pet.expandPanel()
   if (!settingsModal.open) settingsModal.showModal()
 }
@@ -972,6 +1040,44 @@ importLocalModelButton.addEventListener('click', async () => {
 
 openCardFolder.addEventListener('click', () => {
   void openFolder('characterCards')
+})
+
+importCharacterCardsButton.addEventListener('click', async () => {
+  const result = await window.pet.importCharacterCards()
+  settingsStatus.textContent = result.message
+  settingsStatus.dataset.kind = result.skipped.length && !result.imported.length ? 'error' : 'ok'
+  if (result.imported.length) await refreshCharacterCards()
+})
+
+exportCharacterPngButton.addEventListener('click', async () => {
+  const result = await window.pet.exportCharacterPng()
+  settingsStatus.textContent = result.message
+  settingsStatus.dataset.kind = result.ok ? 'ok' : 'error'
+})
+
+pluginList.addEventListener('change', async (event) => {
+  const target = event.target as HTMLInputElement
+  const id = target.dataset.pluginId
+  if (!id) return
+  renderPlugins(await window.pet.setPluginEnabled(id, target.checked))
+  settingsStatus.textContent = target.checked ? '插件已启用' : '插件已停用'
+  settingsStatus.dataset.kind = 'ok'
+})
+
+reloadPluginsButton.addEventListener('click', async () => {
+  await refreshPlugins(true)
+  settingsStatus.textContent = '插件已重新加载'
+  settingsStatus.dataset.kind = 'ok'
+})
+
+openPluginFolder.addEventListener('click', () => {
+  void openFolder('plugins')
+})
+
+window.pet.onPluginMessage((message) => {
+  setMood('happy')
+  say(message.text)
+  window.setTimeout(() => setMood('idle'), 1300)
 })
 
 openModelFolder.addEventListener('click', () => {

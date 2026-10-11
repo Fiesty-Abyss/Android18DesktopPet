@@ -25,6 +25,8 @@ export type CharacterCardInfo = {
   pngPath: string
   hasJson: boolean
   hasPng: boolean
+  /** PNG 内嵌了 SillyTavern 角色卡（chara / ccv3 文本块） */
+  embeddedSpec: 'v2' | 'v3' | ''
   source: 'builtin' | 'library'
 }
 
@@ -62,6 +64,8 @@ export type PetConfig = {
   affinity: number
   petScale: number
   alwaysOnTop: boolean
+  /** 插件启用状态覆盖（插件 id → 是否启用），没有记录时使用插件的 enabledByDefault */
+  pluginStates: Record<string, boolean>
   local: LocalSettings
 }
 
@@ -92,4 +96,16 @@ export type LocalStatus = {
   modelPath: string
   supportedGpuTypes: Array<string | false>
   rootDirs: Record<WorkspaceDirKey, string>
+}
+
+export type CardImportResult = {
+  imported: string[]
+  skipped: string[]
+  message: string
+}
+
+export type FileActionResult = {
+  ok: boolean
+  path?: string
+  message: string
 }

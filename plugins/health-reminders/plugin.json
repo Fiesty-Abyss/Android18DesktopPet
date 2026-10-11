@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "id": "health-reminders",
+  "name": "健康提醒",
+  "version": "1.0.0",
+  "description": "工作时段每 45 分钟提醒喝水、每 2 小时提醒起来活动，23:30 提醒睡觉；长时间不说话她会主动搭话。默认关闭。",
+  "author": "Fiesty-Abyss",
+  "enabledByDefault": false,
+  "reminders": [
+    { "every": 45, "activeHours": [9, 23], "text": ["喝口水。别等渴了才想起来。", "杯子空了吧？去倒水。"] },
+    { "every": 120, "activeHours": [9, 23], "text": ["坐了两个小时了。站起来，走两步。", "肩膀不酸吗？起来活动一下。"] },
+    { "at": "23:30", "text": "{time} 了。该睡了，明天再弄。" }
+  ],
+  "idle": {
+    "afterMinutes": 30,
+    "texts": ["……这么安静，睡着了？", "半天不说话，在忙什么？", "我还在这儿。想聊了就说。"]
+  },
+  "commands": [
+    { "trigger": "/break", "reply": "行，休息五分钟。眼睛离开屏幕，看看远处。", "description": "提醒自己休息一下" }
+  ]
+}

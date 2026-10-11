@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 本地模型说明
+    url: https://github.com/Fiesty-Abyss/Android18DesktopPet/blob/main/models/README.md
+    about: 模型下载、显存设置、CPU 推理崩溃等常见问题
+  - name: 插件开发文档
+    url: https://github.com/Fiesty-Abyss/Android18DesktopPet/blob/main/plugins/README.md
+    about: plugin.json 字段说明与示例

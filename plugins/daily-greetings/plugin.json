@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 1,
+  "id": "daily-greetings",
+  "name": "按时段问候",
+  "version": "1.0.0",
+  "description": "启动时按早上 / 中午 / 晚上 / 深夜打招呼，并提供 /time、/date 快捷命令。",
+  "author": "Fiesty-Abyss",
+  "enabledByDefault": true,
+  "greetings": [
+    { "hours": [5, 11], "texts": ["……早。{weekday}，别空着肚子出门。", "这么早？{time}，你倒是挺勤快。"] },
+    { "hours": [11, 14], "texts": ["中午了。吃饭没有？", "{time}。先吃饭，别的等会儿再说。"] },
+    { "hours": [14, 18], "texts": ["下午这个点最容易犯困。撑住。", "又来了？下午的事做完了吗。"] },
+    { "hours": [18, 23], "texts": ["晚上好。今天累不累？", "{time}了，总算肯歇一会儿？"] },
+    { "hours": [23, 5], "texts": ["都 {time} 了还不睡？", "深夜还开着我……有心事？"] }
+  ],
+  "commands": [
+    { "trigger": "/time", "reply": ["现在是 {time}。", "{time}。自己不会看表？"], "description": "报时" },
+    { "trigger": "/date", "reply": "今天是 {date}，{weekday}。", "description": "今天的日期" }
+  ]
+}
