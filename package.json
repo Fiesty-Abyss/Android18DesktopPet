@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "npm run build && node scripts/package-win.mjs",
@@ -25,7 +26,8 @@
     "electron-builder": "^26.17.0",
     "electron-vite": "^4.0.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^5.0.3"
   },
   "build": {
     "appId": "com.local.android18.desktoppet",
