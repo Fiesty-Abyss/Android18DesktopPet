@@ -1,6 +1,6 @@
 # Android 18 Desktop Pet · 人造人18号桌宠
 
-> **当前版本 0.3.0**：Electron 透明桌宠 + AI 对话。支持云端 API（DeepSeek 等 OpenAI 兼容接口）与本地 GGUF 模型（`node-llama-cpp`，独立子进程推理），自带角色卡库（JSON / SillyTavern PNG 卡导入导出）、声明式插件、好感度、对话模拟、聊天记录隔离与导出、系统托盘。
+> **一个会聊天、会记事、会提醒你喝水的桌面伙伴。** 透明立绘常驻桌面，接 DeepSeek 等云端 API，也能完全离线跑本地 GGUF 模型；兼容 SillyTavern 角色卡，换一张卡就是另一个角色。
 
 ![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
@@ -9,9 +9,62 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/Fiesty-Abyss/Android18DesktopPet/actions/workflows/ci.yml/badge.svg)](https://github.com/Fiesty-Abyss/Android18DesktopPet/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Fiesty-Abyss/Android18DesktopPet?label=release)](https://github.com/Fiesty-Abyss/Android18DesktopPet/releases/latest)
 
-- [快速开始](#快速开始) · [本地模型](#本地模型) · [打包](#打包) · [目录结构](#目录结构) · [配置](#配置) · [已知限制](#已知限制) · [更新日志](CHANGELOG.md)
-- [本地模型说明](models/README.md) · [角色卡库说明](character-cards/README.md) · [聊天记录格式](chats/README.md) · [插件开发](plugins/README.md)
+<table>
+  <tr>
+    <td width="34%" rowspan="2"><a href="docs/screenshots/01-pet-chat.png"><img src="docs/screenshots/01-pet-chat.png" alt="桌宠日常对话"></a><br><sub><b>桌宠本体</b> · 透明立绘 + 气泡对话</sub></td>
+    <td width="33%"><a href="docs/screenshots/08-simulation.png"><img src="docs/screenshots/08-simulation.png" alt="对话模拟"></a><br><sub><b>对话模拟</b> · 逐句推进的剧情对话</sub></td>
+    <td width="33%"><a href="docs/screenshots/12-png-card-import.png"><img src="docs/screenshots/12-png-card-import.png" alt="导入 PNG 角色卡"></a><br><sub><b>角色卡</b> · 直接导入 SillyTavern PNG 卡</sub></td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/04-settings-local.png"><img src="docs/screenshots/04-settings-local.png" alt="本地 GGUF 设置"></a><br><sub><b>本地模型</b> · GGUF 离线推理，CUDA / Vulkan / CPU</sub></td>
+    <td><a href="docs/screenshots/11-plugins-settings.png"><img src="docs/screenshots/11-plugins-settings.png" alt="插件"></a><br><sub><b>插件</b> · 问候、提醒、快捷命令</sub></td>
+  </tr>
+</table>
+
+**[⬇ 下载 Windows 安装包](https://github.com/Fiesty-Abyss/Android18DesktopPet/releases/latest)** · [快速开始](#快速开始) · [亮点](#亮点) · [适用场景](#适用场景) · [为什么是它](#为什么是它) · [功能详解](#功能详解) · [FAQ](#faq) · [路线图](#路线图) · [更新日志](CHANGELOG.md)
+
+[本地模型说明](models/README.md) · [角色卡库说明](character-cards/README.md) · [聊天记录格式](chats/README.md) · [插件开发](plugins/README.md)
+
+---
+
+## 亮点
+
+| | 亮点 | 说明 |
+| --- | --- | --- |
+| 🪟 | **真正的桌面宠物** | 无边框透明窗口，立绘带待机 / 思考 / 开心 / 出错动画，拖到哪待在哪，可缩放、可收进托盘 |
+| ☁️ / 💻 | **云端、本地随意切** | DeepSeek 等 OpenAI 兼容接口开箱即用；也可选本地 GGUF 模型完全离线，CUDA / Vulkan / CPU 三种后端 |
+| 🧩 | **兼容 SillyTavern 角色卡** | 导入 JSON 或 PNG 卡（V2 / V3），也能把当前角色导出成 PNG 卡拿去 SillyTavern 用 |
+| ❤️ | **有“关系”的对话** | 好感度从厌恶到亲近五个阶段，会改变她说话的语气；夸她加分，骂她扣分 |
+| 🎬 | **对话模拟模式** | 写一段剧情，逐句推进；每一句都能改、能删、能插入，适合写完整的角色剧情 |
+| ⏰ | **安全的插件** | 纯 JSON 声明式插件：按时段问候、定时提醒、闲置搭话、`/time` 等快捷命令，不执行任何代码 |
+| 🗂️ | **记录不串台** | 聊天按「模式 + 角色卡 + 模型」分别保存，可导出 Markdown / JSON |
+| 🔒 | **隐私友好** | API Key 只留在主进程；本地模式下对话完全不出本机；模型权重和聊天记录都不进仓库 |
+
+## 适用场景
+
+- **桌面陪伴**：写代码、看资料时，有个角色在屏幕角落陪你聊两句，到点提醒你喝水、起来活动。
+- **离线 / 隐私聊天**：不想把对话发到云端，用本地 8B 模型在自己电脑上跑。
+- **角色扮演与剧情创作**：把 SillyTavern 上的角色卡带到桌面，或用对话模拟一句句写剧情。
+- **学习参考**：一个结构完整的 Electron + TypeScript 项目：透明窗口、托盘、IPC 安全边界、`utilityProcess` 隔离本地推理、PNG 文本块读写、声明式插件与单元测试、CI / Release 工作流。
+
+## 为什么是它
+
+| 对比 | 网页版 AI 聊天 | SillyTavern 等前端 | 传统桌宠 | **Android 18 Desktop Pet** |
+| --- | --- | --- | --- | --- |
+| 常驻桌面 | ✗ 需要开浏览器 | ✗ 浏览器页面 | ✓ | ✓ 透明立绘 + 托盘 |
+| AI 自由对话 | ✓ | ✓ | ✗ 多为固定台词 | ✓ |
+| 本地离线模型 | ✗ | 需另配推理后端 | ✗ | ✓ 内置 node-llama-cpp |
+| SillyTavern 角色卡 | ✗ | ✓ | ✗ | ✓ JSON / PNG 导入导出 |
+| 主动提醒 / 问候 | ✗ | ✗ | 部分支持 | ✓ 插件 |
+| 安装成本 | 无 | 需 Node 环境与配置 | 低 | 下载安装包即可 |
+
+它不打算替代 SillyTavern 的完整角色扮演工作流（世界书、多角色群聊等），而是把“一个角色 + 日常对话 + 提醒”放到桌面上，打开就能用。
+
+---
+
+## 功能详解
 
 ## 1. 桌宠与日常对话
 
@@ -305,6 +358,69 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 - 角色卡的世界书（`character_book`）、多开场白（`alternate_greetings`）暂不使用。
 - 剩余的 `npm audit` 告警来自打包工具链和 node-llama-cpp 从源码编译时才用到的 `simple-git`，运行时不涉及；npm 给出的“修复”是降级大版本，暂未处理。
 - Linux 下透明窗口和托盘图标依赖桌面环境的合成器 / 托盘支持。
+
+## FAQ
+
+<details>
+<summary><b>不想花钱 / 没有 API Key 能用吗？</b></summary>
+
+可以。设置里把推理来源切到「本地 GGUF」，下载一个模型放进 `models/`（推荐的两个 8B 模型见 [本地模型](#本地模型)），全部在本机运行，不需要联网。
+</details>
+
+<details>
+<summary><b>本地模型需要什么配置？</b></summary>
+
+8B Q4_K_M 模型约 4.9 GB，建议 8 GB 显存的 NVIDIA 显卡（CUDA）；6 GB 左右显存可用 Vulkan 并开启 KV 缓存量化；没有独显也能用 CPU 跑小模型，但会比较慢。具体参数见 [models/README.md](models/README.md)。
+</details>
+
+<details>
+<summary><b>完整版和 lite 版有什么区别？</b></summary>
+
+完整版带 CUDA 二进制（N 卡推荐）；lite 版只有 CPU + Vulkan，体积小约 500 MB，A 卡 / I 卡或只用云端 API 时足够。
+</details>
+
+<details>
+<summary><b>可以换成别的角色吗？</b></summary>
+
+可以。设置 → 角色卡库 →「导入角色卡…」，选择 SillyTavern / Chub 下载的 JSON 或 PNG 卡即可；也可以直接手写 JSON 设定。立绘目前固定为人造人18号。
+</details>
+
+<details>
+<summary><b>聊天记录存在哪？会上传吗？</b></summary>
+
+保存在程序目录的 `chats/`（JSONL 日志 + 快照）和系统用户目录的配置文件里。使用云端 API 时，对话内容会发送给你配置的服务商；使用本地模型时不会离开本机。
+</details>
+
+<details>
+<summary><b>插件安全吗？能写一个查天气的插件吗？</b></summary>
+
+插件只是 JSON，程序不会执行其中的任何代码，所以第三方插件无法读写文件、联网或拿到 API Key。代价是插件不能调用外部服务，查天气这类需求暂不支持。写法见 [plugins/README.md](plugins/README.md)。
+</details>
+
+<details>
+<summary><b>用本地模型时推理进程退出了？</b></summary>
+
+多半是纯 CPU 跑较大模型时触发了 Electron 单次 2 GiB 内存分配上限。桌宠本体不受影响，开启 GPU（CUDA / Vulkan）把大部分层放到显存即可，详见 [已知限制](#已知限制)。
+</details>
+
+<details>
+<summary><b>支持 macOS 吗？</b></summary>
+
+目前只在 Windows（主要平台）和 Linux 上测试过，没有提供 macOS 安装包。
+</details>
+
+## 路线图
+
+- [x] 透明桌宠、托盘、好感度、对话模拟
+- [x] 云端 API 与本地 GGUF 双推理来源，本地推理独立子进程
+- [x] 角色卡库：JSON / SillyTavern PNG 卡导入导出
+- [x] 声明式插件：问候、提醒、闲置搭话、快捷命令
+- [x] CI、Windows 安装包自动发布
+- [ ] 角色卡世界书（`character_book`）与多开场白（`alternate_greetings`）
+- [ ] 自定义立绘 / 跟随角色卡切换立绘
+- [ ] 语音朗读（TTS）
+- [ ] 流式输出，回复逐字显示
+- [ ] macOS 安装包
 
 ## 说明
 
