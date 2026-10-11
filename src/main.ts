@@ -1,4 +1,13 @@
 import './style.css'
+import type {
+  CharacterCard,
+  CharacterCardInfo,
+  ChatMessage,
+  LocalModelInfo,
+  LocalSettings,
+  RendererConfig,
+  WorkspaceDirKey
+} from '../shared/types'
 import bundledPetImage from '../assets/android18-chibi.png'
 
 const app = document.querySelector<HTMLDivElement>('#app')

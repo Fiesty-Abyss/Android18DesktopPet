@@ -8,86 +8,18 @@ import { is } from '@electron-toolkit/utils'
 import defaultCharacterCardData from '../characters/android18.card.json'
 import trayIconPath from '../assets/tray-icon.png?asset'
 import appIconPath from '../assets/icon.png?asset'
-
-type ChatMessage = {
-  role: 'user' | 'assistant'
-  content: string
-}
-
-type CharacterCard = {
-  name: string
-  greeting: string
-  persona: string
-  speechStyle: string[]
-  behaviorRules: string[]
-  systemPrompt: string
-}
-
-type CharacterCardInfo = {
-  id: string
-  name: string
-  baseName: string
-  jsonPath: string
-  pngPath: string
-  hasJson: boolean
-  hasPng: boolean
-  source: 'builtin' | 'library'
-}
-
-type LocalSettings = {
-  modelPath: string
-  gpuBackend: 'auto' | 'cuda' | 'vulkan' | 'cpu'
-  vramMode: 'auto' | 'high' | 'medium' | 'low'
-  contextSize: number
-  batchSize: number
-  threads: number
-  flashAttention: boolean
-  useMmap: boolean
-  useMlock: boolean
-  allowSharedMemory: boolean
-  kvCacheType: 'F16' | 'Q8_0' | 'Q4_0'
-  extraModelDirs: string[]
-}
-
-type WorkspaceDirKey = 'models' | 'plugins' | 'chats' | 'cache' | 'characterCards'
-
-type PetConfig = {
-  interactionMode: 'pet' | 'simulation'
-  storyContext: string
-  characterId: string
-  characterPngPath: string
-  provider: 'api' | 'local'
-  baseUrl: string
-  apiKey: string
-  model: string
-  temperature: number
-  maxTokens: number
-  characterCard: CharacterCard
-  modelImagePath: string
-  affinity: number
-  petScale: number
-  alwaysOnTop: boolean
-  local: LocalSettings
-}
-
-type RendererConfig = Omit<PetConfig, 'apiKey'> & {
-  apiKeySet: boolean
-  memoryKey: string
-}
-
-type ConfigPatch = Partial<Omit<PetConfig, 'apiKey' | 'characterCard' | 'local'>> & {
-  apiKey?: string
-  characterCard?: Partial<CharacterCard>
-  local?: Partial<LocalSettings>
-}
-
-type LocalModelInfo = {
-  name: string
-  path: string
-  size: number
-  source: 'library' | 'external'
-  dir: string
-}
+import type {
+  CharacterCard,
+  CharacterCardInfo,
+  ChatMessage,
+  ConfigPatch,
+  LocalModelInfo,
+  LocalSettings,
+  LocalStatus,
+  PetConfig,
+  RendererConfig,
+  WorkspaceDirKey
+} from '../shared/types'
 
 type LocalRuntime = {
   key: string
@@ -1107,12 +1039,7 @@ async function importLocalModel(): Promise<LocalModelInfo[]> {
   return scanLocalModels()
 }
 
-async function getLocalStatus(): Promise<{
-  loaded: boolean
-  modelPath: string
-  supportedGpuTypes: Array<string | false>
-  rootDirs: Record<WorkspaceDirKey, string>
-}> {
+async function getLocalStatus(): Promise<LocalStatus> {
   let supportedGpuTypes: Array<string | false> = []
   try {
     const { getLlamaGpuTypes } = await loadNodeLlama()
