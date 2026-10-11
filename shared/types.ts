@@ -64,6 +64,8 @@ export type PetConfig = {
   affinity: number
   petScale: number
   alwaysOnTop: boolean
+  /** 插件启用状态覆盖（插件 id → 是否启用），没有记录时使用插件的 enabledByDefault */
+  pluginStates: Record<string, boolean>
   local: LocalSettings
 }
 

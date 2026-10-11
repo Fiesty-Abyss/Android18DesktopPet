@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } from 'electron'
 import { existsSync } from 'node:fs'
 import { appendFile, copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -10,6 +10,19 @@ import trayIconPath from '../assets/tray-icon.png?asset'
 import appIconPath from '../assets/icon.png?asset'
 import bundledPetImagePath from '../assets/android18-chibi.png?asset'
 import { isPng, readPngCharacterCard, writePngCharacterCard } from './png-card'
+import {
+  findCommand,
+  findGreeting,
+  isPluginEnabled,
+  loadPlugins,
+  pickText,
+  PluginScheduler,
+  pluginSystemPrompt,
+  renderTemplate,
+  toPluginInfo,
+  type LoadedPlugin
+} from './plugins'
+import type { PluginListResult, PluginLoadError, PluginMessage } from '../shared/plugin-types'
 import type {
   CardImportResult,
   CharacterCard,
@@ -62,6 +75,7 @@ const defaultConfig: PetConfig = {
   affinity: 0,
   petScale: 1,
   alwaysOnTop: true,
+  pluginStates: {},
   local: defaultLocalSettings
 }
 
@@ -79,6 +93,10 @@ const localLlm = new LocalLlmClient()
 let panelExpanded = false
 let tray: Tray | null = null
 let savePositionTimer: NodeJS.Timeout | undefined
+let loadedPlugins: LoadedPlugin[] = []
+let pluginErrors: PluginLoadError[] = []
+const pluginScheduler = new PluginScheduler()
+let pluginTicker: NodeJS.Timeout | undefined
 
 function appRootDir(): string {
   if (is.dev) return process.cwd()
@@ -189,6 +207,7 @@ function getConfig(): PetConfig {
     characterId: saved.characterId || defaultConfig.characterId,
     characterPngPath: saved.characterPngPath || defaultConfig.characterPngPath,
     apiKey: saved.apiKey || defaultConfig.apiKey,
+    pluginStates: saved.pluginStates && typeof saved.pluginStates === 'object' ? saved.pluginStates : {},
     characterCard: mergeCharacterCard(saved.characterCard),
     local: mergeLocalSettings(saved.local)
   }
@@ -217,6 +236,7 @@ function saveConfig(patch: ConfigPatch): RendererConfig {
     affinity: Math.round(clampNumber(patch.affinity, -100, 100, current.affinity)),
     petScale: clampNumber(patch.petScale, 0.7, 1.45, current.petScale),
     alwaysOnTop: typeof patch.alwaysOnTop === 'boolean' ? patch.alwaysOnTop : current.alwaysOnTop,
+    pluginStates: patch.pluginStates && typeof patch.pluginStates === 'object' ? patch.pluginStates : current.pluginStates,
     characterId: typeof patch.characterId === 'string' ? patch.characterId : current.characterId,
     characterPngPath: typeof patch.characterPngPath === 'string' ? patch.characterPngPath : current.characterPngPath,
     characterCard: mergeCharacterCard(patch.characterCard || current.characterCard),
@@ -269,10 +289,89 @@ function buildSystemPrompt(config: PetConfig): string {
     ...card.speechStyle.map((item) => `- ${item}`),
     '',
     '行为规则：',
-    ...card.behaviorRules.map((item) => `- ${item}`)
+    ...card.behaviorRules.map((item) => `- ${item}`),
+    '',
+    pluginSystemPrompt(enabledPlugins(config))
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+function enabledPlugins(config = getConfig()): LoadedPlugin[] {
+  return loadedPlugins.filter((plugin) => isPluginEnabled(plugin.manifest, config.pluginStates))
+}
+
+async function reloadPlugins(): Promise<PluginListResult> {
+  await ensureWorkspaceFolders()
+  const result = await loadPlugins(workspaceDirs().plugins)
+  loadedPlugins = result.plugins
+  pluginErrors = result.errors
+  for (const error of pluginErrors) console.warn(`[plugins] ${error.dir}: ${error.message}`)
+  pluginScheduler.setPlugins(enabledPlugins())
+  return listPlugins()
+}
+
+function listPlugins(): PluginListResult {
+  const states = getConfig().pluginStates
+  return { plugins: loadedPlugins.map((plugin) => toPluginInfo(plugin, states)), errors: pluginErrors }
+}
+
+function setPluginEnabled(id: string, enabled: boolean): PluginListResult {
+  const config = getConfig()
+  saveConfig({ pluginStates: { ...config.pluginStates, [id]: enabled } })
+  pluginScheduler.setPlugins(enabledPlugins())
+  return listPlugins()
+}
+
+function pluginTemplateContext(config = getConfig()) {
+  return { characterName: config.characterCard.name, affinity: config.affinity }
+}
+
+function emitPluginMessage(message: PluginMessage): void {
+  if (!mainWindow) return
+  const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
+  if (visible) {
+    mainWindow.webContents.send('pet:plugin-message', message)
+  } else if (Notification.isSupported()) {
+    // 桌宠收在托盘里时，用系统通知代替气泡
+    new Notification({ title: `${getConfig().characterCard.name} · ${message.pluginName}`, body: message.text, icon: appIconPath }).show()
+  }
+}
+
+function startPluginTicker(): void {
+  clearInterval(pluginTicker)
+  pluginTicker = setInterval(() => {
+    for (const message of pluginScheduler.tick(new Date(), pluginTemplateContext())) emitPluginMessage(message)
+  }, 15_000)
+}
+
+function sendStartupGreeting(): void {
+  const config = getConfig()
+  const greeting = findGreeting(enabledPlugins(config), new Date())
+  if (!greeting) return
+  emitPluginMessage({
+    pluginId: greeting.plugin.manifest.id,
+    pluginName: greeting.plugin.manifest.name,
+    kind: 'greeting',
+    text: renderTemplate(pickText(greeting.texts), { ...pluginTemplateContext(config), now: new Date() })
+  })
+}
+
+/** 处理插件快捷命令；不是命令时返回 null，正常发给模型 */
+function runPluginCommand(input: string): string | null {
+  pluginScheduler.noteInteraction()
+  const config = getConfig()
+  const plugins = enabledPlugins(config)
+  const normalized = input.trim().toLowerCase()
+  if (normalized === '/help' || normalized === '/帮助') {
+    const commands = plugins.flatMap((plugin) =>
+      (plugin.manifest.commands || []).map((command) => `${command.trigger}${command.description ? `：${command.description}` : ''}`)
+    )
+    return commands.length ? `可用命令：\n${commands.join('\n')}` : '现在没有启用带命令的插件。'
+  }
+  const match = findCommand(plugins, input)
+  if (!match) return null
+  return renderTemplate(pickText(match.command.reply), { ...pluginTemplateContext(config), now: new Date() })
 }
 
 function escapeRegExp(text: string): string {
@@ -1190,8 +1289,14 @@ if (!gotSingleInstanceLock) {
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
   await ensureWorkspaceFolders()
+  await reloadPlugins()
   createWindow()
   createTray()
+  startPluginTicker()
+  mainWindow?.webContents.once('did-finish-load', () => {
+    // 等渲染进程显示完角色卡开场白后，再让插件打招呼
+    setTimeout(sendStartupGreeting, 2500)
+  })
 
   ipcMain.handle('pet:chat', async (_event, history: ChatMessage[]) => {
     return askAssistant(history)
@@ -1239,6 +1344,22 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('pet:export-character-png', () => {
     return exportCharacterPng()
+  })
+
+  ipcMain.handle('pet:list-plugins', () => {
+    return listPlugins()
+  })
+
+  ipcMain.handle('pet:reload-plugins', () => {
+    return reloadPlugins()
+  })
+
+  ipcMain.handle('pet:set-plugin-enabled', (_event, id: string, enabled: boolean) => {
+    return setPluginEnabled(String(id), Boolean(enabled))
+  })
+
+  ipcMain.handle('pet:run-plugin-command', (_event, input: string) => {
+    return runPluginCommand(String(input || ''))
   })
 
   ipcMain.handle('pet:select-model-image', () => {
@@ -1313,6 +1434,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', async () => {
+  clearInterval(pluginTicker)
   tray?.destroy()
   tray = null
   localLlm.dispose()
