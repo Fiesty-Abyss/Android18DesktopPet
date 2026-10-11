@@ -461,6 +461,7 @@ textarea {
 
 .settings-grid input,
 .settings-grid select,
+.model-picker select,
 .number-field {
   height: 34px;
   padding: 6px 9px;

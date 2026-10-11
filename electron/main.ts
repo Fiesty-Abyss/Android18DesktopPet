@@ -503,6 +503,12 @@ function createWindow(): void {
 
   // 'moved' 只在 Windows/macOS 触发，Linux 只有 'move'，这里统一用 'move' + 防抖
   mainWindow.on('move', rememberWindowPosition)
+  // 立绘区域是可拖拽区域（-webkit-app-region: drag），在 Windows/Linux 上右键会弹出系统窗口菜单，
+  // 渲染进程收不到 contextmenu 事件。这里拦截系统菜单，改为打开桌宠设置。
+  mainWindow.on('system-context-menu', (event) => {
+    event.preventDefault()
+    mainWindow?.webContents.send('pet:open-settings')
+  })
   mainWindow.on('show', refreshTrayMenu)
   mainWindow.on('hide', refreshTrayMenu)
   mainWindow.on('closed', () => {
