@@ -300,8 +300,13 @@ textarea {
 }
 
 .panel-header {
+  gap: 6px;
   padding: 10px 10px 8px;
   border-bottom: 1px solid rgba(18, 29, 42, 0.08);
+}
+
+.panel-header strong {
+  margin-right: auto;
 }
 
 .history-list {

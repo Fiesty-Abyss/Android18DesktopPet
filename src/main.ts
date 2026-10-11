@@ -28,6 +28,7 @@ app.innerHTML = `
     <aside class="history-panel" id="history-panel" aria-label="聊天历史">
       <header class="panel-header">
         <strong>聊天历史</strong>
+        <button class="secondary-button compact" id="export-history" type="button" title="导出为 Markdown / JSON">导出</button>
         <button class="secondary-button compact" id="open-chat-folder" type="button" title="打开聊天记录目录">目录</button>
         <button class="secondary-button compact" id="clear-history" type="button">清空</button>
         <button class="icon-button" id="close-history" type="button" title="关闭历史" aria-label="关闭历史">X</button>
@@ -339,6 +340,7 @@ const localUseMlock = document.querySelector<HTMLInputElement>('#local-use-mlock
 const localSharedMemory = document.querySelector<HTMLInputElement>('#local-shared-memory')!
 const openCardFolder = document.querySelector<HTMLButtonElement>('#open-card-folder')!
 const openModelFolder = document.querySelector<HTMLButtonElement>('#open-model-folder')!
+const exportHistory = document.querySelector<HTMLButtonElement>('#export-history')!
 const openChatFolder = document.querySelector<HTMLButtonElement>('#open-chat-folder')!
 const localExtraDirs = document.querySelector<HTMLTextAreaElement>('#local-extra-dirs')!
 const addModelDir = document.querySelector<HTMLButtonElement>('#add-model-dir')!
@@ -962,6 +964,11 @@ openCardFolder.addEventListener('click', () => {
 
 openModelFolder.addEventListener('click', () => {
   void openFolder('models')
+})
+
+exportHistory.addEventListener('click', async () => {
+  const result = await window.pet.exportChat()
+  say(result.message)
 })
 
 openChatFolder.addEventListener('click', () => {

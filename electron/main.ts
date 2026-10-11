@@ -1113,6 +1113,53 @@ async function writeChatSnapshot(messages: ChatMessage[], config = getConfig()):
   }
 }
 
+function chatToMarkdown(messages: ChatMessage[], config: PetConfig): string {
+  const modelName = config.provider === 'local' ? basename(config.local.modelPath || 'local-gguf') : config.model
+  const lines = [
+    `# 与 ${config.characterCard.name} 的聊天记录`,
+    '',
+    `- 导出时间：${new Date().toLocaleString()}`,
+    `- 交互模式：${config.interactionMode === 'simulation' ? '对话模拟' : '桌宠'}`,
+    `- 推理来源：${config.provider === 'local' ? '本地 GGUF' : '云端 API'}（${modelName}）`,
+    `- 好感度：${config.affinity}`,
+    ''
+  ]
+  if (config.interactionMode === 'simulation' && config.storyContext.trim()) {
+    lines.push('## 剧情', '', config.storyContext.trim(), '')
+  }
+  lines.push('## 对话', '')
+  for (const message of messages) {
+    const speaker = message.role === 'user' ? '你' : config.characterCard.name
+    lines.push(`**${speaker}：** ${message.content.replace(/\n/g, '  \n')}`, '')
+  }
+  return lines.join('\n')
+}
+
+async function exportCurrentChat(): Promise<{ ok: boolean; path?: string; message: string }> {
+  const config = getConfig()
+  const messages = currentMessages(config)
+  if (messages.length === 0) return { ok: false, message: '当前没有可以导出的聊天记录。' }
+  if (!mainWindow) return { ok: false, message: '窗口未就绪。' }
+
+  const defaultName = `${safeFilePart(config.characterCard.name)}_${dayStamp()}.md`
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出聊天记录',
+    defaultPath: join(workspaceDirs().chats, defaultName),
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'JSON', extensions: ['json'] }
+    ]
+  })
+  if (result.canceled || !result.filePath) return { ok: false, message: '已取消导出。' }
+
+  const content =
+    extname(result.filePath).toLowerCase() === '.json'
+      ? JSON.stringify({ characterName: config.characterCard.name, exportedAt: new Date().toISOString(), messages }, null, 2)
+      : chatToMarkdown(messages, config)
+  await writeFile(result.filePath, content, 'utf8')
+  return { ok: true, path: result.filePath, message: `已导出 ${messages.length} 条消息。` }
+}
+
 async function setCurrentMessages(messages: ChatMessage[], config = getConfig()): Promise<void> {
   const key = chatMemoryKey(config)
   const memories = store.get('memories', {})
@@ -1151,6 +1198,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('pet:clear-memory', async () => {
     await setCurrentMessages([])
+  })
+
+  ipcMain.handle('pet:export-chat', () => {
+    return exportCurrentChat()
   })
 
   ipcMain.handle('pet:get-config', () => {

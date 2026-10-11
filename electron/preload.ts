@@ -21,6 +21,8 @@ const petAPI = {
   getMemory: () => ipcRenderer.invoke('pet:get-memory') as Promise<ChatMessage[]>,
   setMemory: (messages: ChatMessage[]) => ipcRenderer.invoke('pet:set-memory', messages) as Promise<void>,
   clearMemory: () => ipcRenderer.invoke('pet:clear-memory') as Promise<void>,
+  exportChat: () =>
+    ipcRenderer.invoke('pet:export-chat') as Promise<{ ok: boolean; path?: string; message: string }>,
   getConfig: () => ipcRenderer.invoke('pet:get-config') as Promise<RendererConfig>,
   saveConfig: (patch: ConfigPatch) => ipcRenderer.invoke('pet:save-config', patch) as Promise<RendererConfig>,
   resetCharacterCard: () => ipcRenderer.invoke('pet:reset-character-card') as Promise<RendererConfig>,
