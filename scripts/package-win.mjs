@@ -1,9 +1,10 @@
-import { cp, mkdir, readdir, rm, rename, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rm, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const electronDist = join(root, 'node_modules', 'electron', 'dist')
 const outDir = join(root, 'out')
 const targetDir = join(root, 'dist', 'Android18DesktopPet')
@@ -11,8 +12,12 @@ const appDir = join(targetDir, 'resources', 'app')
 const launcherName = 'Android18DesktopPet.exe'
 const runtimeDirs = ['models', 'plugins', 'chats', 'cache', 'character-cards']
 
+if (process.platform !== 'win32') {
+  console.warn('提示：该脚本打包的是 Windows 绿色版（electron.exe），需要在 Windows 上运行 npm install 后执行。')
+}
+
 if (!existsSync(join(electronDist, 'electron.exe'))) {
-  throw new Error('Missing Electron runtime. Run npm install first.')
+  throw new Error('Missing Windows Electron runtime (electron.exe). Run npm install on Windows first, or use npm run dist:builder.')
 }
 
 if (!existsSync(join(outDir, 'main', 'main.js'))) {
@@ -52,8 +57,8 @@ await writeFile(
   join(appDir, 'package.json'),
   JSON.stringify(
     {
-      name: 'android-18-desktop-pet',
-      version: '0.1.0',
+      name: pkg.name,
+      version: pkg.version,
       type: 'module',
       main: 'out/main/main.js'
     },
