@@ -56,6 +56,7 @@ type LocalSettings = {
   useMlock: boolean
   allowSharedMemory: boolean
   kvCacheType: 'F16' | 'Q8_0' | 'Q4_0'
+  extraModelDirs: string[]
 }
 
 type LocalModelInfo = {
@@ -63,13 +64,16 @@ type LocalModelInfo = {
   path: string
   size: number
   source: 'library' | 'external'
+  dir: string
 }
+
+type WorkspaceDirKey = 'models' | 'plugins' | 'chats' | 'cache' | 'characterCards'
 
 type LocalStatus = {
   loaded: boolean
   modelPath: string
   supportedGpuTypes: Array<string | false>
-  rootDirs: Record<'models' | 'plugins' | 'chats' | 'cache' | 'characterCards', string>
+  rootDirs: Record<WorkspaceDirKey, string>
 }
 
 type PetConfigPatch = {
@@ -106,6 +110,8 @@ interface Window {
     getCharacterBackground: () => Promise<string | null>
     scanLocalModels: () => Promise<LocalModelInfo[]>
     importLocalModel: () => Promise<LocalModelInfo[]>
+    pickModelDirectory: () => Promise<string>
+    openFolder: (key: WorkspaceDirKey) => Promise<string>
     getLocalStatus: () => Promise<LocalStatus>
     unloadLocalModel: () => Promise<LocalStatus>
     expandPanel: () => void

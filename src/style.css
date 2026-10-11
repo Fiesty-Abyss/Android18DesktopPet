@@ -474,7 +474,25 @@ textarea {
 }
 
 .character-source-section .model-picker {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+#local-section .model-picker {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.dir-editor textarea {
+  min-height: 58px;
+  max-height: 120px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .hint-text {

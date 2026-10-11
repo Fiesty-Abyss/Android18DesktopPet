@@ -56,6 +56,7 @@ type LocalSettings = {
   useMlock: boolean
   allowSharedMemory: boolean
   kvCacheType: 'F16' | 'Q8_0' | 'Q4_0'
+  extraModelDirs: string[]
 }
 
 const petAPI = {
@@ -73,6 +74,9 @@ const petAPI = {
   getCharacterBackground: () => ipcRenderer.invoke('pet:get-character-background'),
   scanLocalModels: () => ipcRenderer.invoke('pet:scan-local-models'),
   importLocalModel: () => ipcRenderer.invoke('pet:import-local-model'),
+  pickModelDirectory: () => ipcRenderer.invoke('pet:pick-model-directory') as Promise<string>,
+  openFolder: (key: 'models' | 'plugins' | 'chats' | 'cache' | 'characterCards') =>
+    ipcRenderer.invoke('pet:open-folder', key) as Promise<string>,
   getLocalStatus: () => ipcRenderer.invoke('pet:get-local-status'),
   unloadLocalModel: () => ipcRenderer.invoke('pet:unload-local-model'),
   expandPanel: () => ipcRenderer.send('window:expand-panel'),

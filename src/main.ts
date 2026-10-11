@@ -19,6 +19,7 @@ app.innerHTML = `
     <aside class="history-panel" id="history-panel" aria-label="聊天历史">
       <header class="panel-header">
         <strong>聊天历史</strong>
+        <button class="secondary-button compact" id="open-chat-folder" type="button" title="打开聊天记录目录">目录</button>
         <button class="secondary-button compact" id="clear-history" type="button">清空</button>
         <button class="icon-button" id="close-history" type="button" title="关闭历史" aria-label="关闭历史">X</button>
       </header>
@@ -79,6 +80,7 @@ app.innerHTML = `
               <select id="character-source-select"></select>
             </label>
             <button class="secondary-button" id="refresh-character-cards" type="button">刷新角色库</button>
+            <button class="secondary-button" id="open-card-folder" type="button">打开目录</button>
           </div>
           <p class="hint-text" id="character-card-hint"></p>
         </section>
@@ -121,6 +123,16 @@ app.innerHTML = `
             </label>
             <button class="secondary-button" id="refresh-local-models" type="button">刷新</button>
             <button class="secondary-button" id="import-local-model" type="button">导入GGUF</button>
+            <button class="secondary-button" id="open-model-folder" type="button">打开目录</button>
+          </div>
+
+          <label class="card-editor dir-editor">
+            额外模型目录（每行一个，保存后生效；不会复制模型文件）
+            <textarea id="local-extra-dirs" spellcheck="false" placeholder="例如 D:\\LLM\\gguf"></textarea>
+          </label>
+          <div class="inline-actions">
+            <button class="secondary-button" id="add-model-dir" type="button">添加目录…</button>
+            <span class="hint-text" id="local-model-hint"></span>
           </div>
 
           <div class="settings-grid">
@@ -309,6 +321,12 @@ const localFlashAttention = document.querySelector<HTMLInputElement>('#local-fla
 const localUseMmap = document.querySelector<HTMLInputElement>('#local-use-mmap')!
 const localUseMlock = document.querySelector<HTMLInputElement>('#local-use-mlock')!
 const localSharedMemory = document.querySelector<HTMLInputElement>('#local-shared-memory')!
+const openCardFolder = document.querySelector<HTMLButtonElement>('#open-card-folder')!
+const openModelFolder = document.querySelector<HTMLButtonElement>('#open-model-folder')!
+const openChatFolder = document.querySelector<HTMLButtonElement>('#open-chat-folder')!
+const localExtraDirs = document.querySelector<HTMLTextAreaElement>('#local-extra-dirs')!
+const addModelDir = document.querySelector<HTMLButtonElement>('#add-model-dir')!
+const localModelHint = document.querySelector<HTMLElement>('#local-model-hint')!
 const localStatus = document.querySelector<HTMLElement>('#local-status')!
 const unloadLocalModel = document.querySelector<HTMLButtonElement>('#unload-local-model')!
 const temperatureInput = document.querySelector<HTMLInputElement>('#temperature')!
@@ -508,6 +526,7 @@ function applyConfig(nextConfig: RendererConfig): void {
   localUseMlock.checked = config.local.useMlock
   localSharedMemory.checked = config.local.allowSharedMemory
   localKvCache.value = config.local.kvCacheType
+  localExtraDirs.value = config.local.extraModelDirs.join('\n')
 
   if (knownModels.has(config.model)) {
     modelSelect.value = config.model
@@ -534,11 +553,13 @@ function renderLocalModels(): void {
   if (localModels.length === 0) {
     const option = new Option('没有发现 GGUF 模型', '')
     localModelSelect.add(option)
+    localModelHint.textContent = '把 .gguf 放进 models/，或在上面添加额外目录后点“刷新”。'
     return
   }
 
+  localModelHint.textContent = `共发现 ${localModels.length} 个 GGUF 模型。`
   for (const model of localModels) {
-    const source = model.source === 'library' ? 'models' : 'E:\\mod'
+    const source = model.source === 'library' ? 'models' : model.dir
     const option = new Option(`${model.name} · ${formatBytes(model.size)} · ${source}`, model.path)
     localModelSelect.add(option)
   }
@@ -713,6 +734,21 @@ function openDevMode(): void {
   if (!devModal.open) devModal.showModal()
 }
 
+function parseDirList(text: string): string[] {
+  return text
+    .split(/\r?\n|;/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+async function openFolder(key: WorkspaceDirKey): Promise<void> {
+  const error = await window.pet.openFolder(key)
+  if (error) {
+    settingsStatus.textContent = `打开目录失败：${error}`
+    settingsStatus.dataset.kind = 'error'
+  }
+}
+
 async function saveSettings(): Promise<void> {
   const characterCard = parseCharacterCard()
   if (!characterCard) return
@@ -742,12 +778,14 @@ async function saveSettings(): Promise<void> {
       useMmap: localUseMmap.checked,
       useMlock: localUseMlock.checked,
       allowSharedMemory: localSharedMemory.checked,
-      kvCacheType: localKvCache.value as LocalSettings['kvCacheType']
+      kvCacheType: localKvCache.value as LocalSettings['kvCacheType'],
+      extraModelDirs: parseDirList(localExtraDirs.value)
     }
   })
 
   apiKeyInput.value = ''
   applyConfig(next)
+  void refreshLocalModels()
   settingsStatus.textContent = '已保存'
   settingsStatus.dataset.kind = 'ok'
   say(`${config.characterCard.name} 的设置已经更新。`)
@@ -897,6 +935,28 @@ importLocalModelButton.addEventListener('click', async () => {
   localModels = await window.pet.importLocalModel()
   renderLocalModels()
   settingsStatus.textContent = '模型库已更新'
+  settingsStatus.dataset.kind = 'ok'
+})
+
+openCardFolder.addEventListener('click', () => {
+  void openFolder('characterCards')
+})
+
+openModelFolder.addEventListener('click', () => {
+  void openFolder('models')
+})
+
+openChatFolder.addEventListener('click', () => {
+  void openFolder('chats')
+})
+
+addModelDir.addEventListener('click', async () => {
+  const dir = await window.pet.pickModelDirectory()
+  if (!dir) return
+  const dirs = parseDirList(localExtraDirs.value)
+  if (!dirs.includes(dir)) dirs.push(dir)
+  localExtraDirs.value = dirs.join('\n')
+  settingsStatus.textContent = '已添加目录，点“保存”后扫描'
   settingsStatus.dataset.kind = 'ok'
 })
 

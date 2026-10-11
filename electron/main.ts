@@ -1,8 +1,8 @@
 import 'dotenv/config'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { appendFile, copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import Store from 'electron-store'
 import { is } from '@electron-toolkit/utils'
 import defaultCharacterCardData from '../characters/android18.card.json'
@@ -44,7 +44,10 @@ type LocalSettings = {
   useMlock: boolean
   allowSharedMemory: boolean
   kvCacheType: 'F16' | 'Q8_0' | 'Q4_0'
+  extraModelDirs: string[]
 }
+
+type WorkspaceDirKey = 'models' | 'plugins' | 'chats' | 'cache' | 'characterCards'
 
 type PetConfig = {
   interactionMode: 'pet' | 'simulation'
@@ -80,6 +83,7 @@ type LocalModelInfo = {
   path: string
   size: number
   source: 'library' | 'external'
+  dir: string
 }
 
 type LocalRuntime = {
@@ -103,7 +107,9 @@ const defaultLocalSettings: LocalSettings = {
   useMmap: true,
   useMlock: false,
   allowSharedMemory: false,
-  kvCacheType: 'F16'
+  kvCacheType: 'F16',
+  // 兼容旧版本：Windows 下默认继续扫描 E:\mod，其他系统默认不扫描额外目录
+  extraModelDirs: process.platform === 'win32' ? ['E:\\mod'] : []
 }
 
 const defaultConfig: PetConfig = {
@@ -150,7 +156,7 @@ function rootPath(...parts: string[]): string {
   return join(appRootDir(), ...parts)
 }
 
-function workspaceDirs(): Record<'models' | 'plugins' | 'chats' | 'cache' | 'characterCards', string> {
+function workspaceDirs(): Record<WorkspaceDirKey, string> {
   return {
     models: rootPath('models'),
     plugins: rootPath('plugins'),
@@ -187,8 +193,23 @@ function mergeLocalSettings(local?: Partial<LocalSettings>): LocalSettings {
     useMmap: local?.useMmap ?? defaultLocalSettings.useMmap,
     useMlock: local?.useMlock ?? defaultLocalSettings.useMlock,
     allowSharedMemory: local?.allowSharedMemory ?? defaultLocalSettings.allowSharedMemory,
-    kvCacheType: local?.kvCacheType || defaultLocalSettings.kvCacheType
+    kvCacheType: local?.kvCacheType || defaultLocalSettings.kvCacheType,
+    extraModelDirs: normalizeDirList(local?.extraModelDirs, defaultLocalSettings.extraModelDirs)
   }
+}
+
+function normalizeDirList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return [...fallback]
+  const seen = new Set<string>()
+  const dirs: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const dir = item.trim()
+    if (!dir || seen.has(dir)) continue
+    seen.add(dir)
+    dirs.push(dir)
+  }
+  return dirs.slice(0, 16)
 }
 
 function stableHash(text: string): string {
@@ -859,16 +880,34 @@ async function selectModelImage(): Promise<RendererConfig> {
   return saveConfig({ modelImagePath: destination })
 }
 
-async function scanDirForModels(dir: string, source: LocalModelInfo['source']): Promise<LocalModelInfo[]> {
+async function scanDirForModels(
+  dir: string,
+  source: LocalModelInfo['source'],
+  depth = 2
+): Promise<LocalModelInfo[]> {
   if (!existsSync(dir)) return []
-  const entries = await readdir(dir, { withFileTypes: true })
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
   const models: LocalModelInfo[] = []
 
   for (const entry of entries) {
-    if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.gguf') continue
     const path = join(dir, entry.name)
-    const info = await stat(path)
-    models.push({ name: entry.name, path, size: info.size, source })
+    // 支持“模型名/xxx.gguf”这种从 Hugging Face 下载后常见的子目录结构
+    if (entry.isDirectory() && depth > 1 && !entry.name.startsWith('.')) {
+      models.push(...(await scanDirForModels(path, source, depth - 1)))
+      continue
+    }
+    if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.gguf') continue
+    try {
+      const info = await stat(path)
+      models.push({ name: entry.name, path, size: info.size, source, dir })
+    } catch {
+      // 文件被占用或权限不足时跳过
+    }
   }
 
   return models
@@ -876,13 +915,34 @@ async function scanDirForModels(dir: string, source: LocalModelInfo['source']): 
 
 async function scanLocalModels(): Promise<LocalModelInfo[]> {
   await ensureWorkspaceFolders()
-  const dirs = workspaceDirs()
-  const models = [
-    ...(await scanDirForModels(dirs.models, 'library')),
-    ...(await scanDirForModels('E:\\mod', 'external'))
+  const libraryDir = workspaceDirs().models
+  const extraDirs = getConfig().local.extraModelDirs.filter((dir) => resolve(dir) !== resolve(libraryDir))
+  const found = [
+    ...(await scanDirForModels(libraryDir, 'library')),
+    ...(await Promise.all(extraDirs.map((dir) => scanDirForModels(dir, 'external')))).flat()
   ]
 
-  return models.sort((a, b) => a.name.localeCompare(b.name))
+  const unique = new Map<string, LocalModelInfo>()
+  for (const model of found) unique.set(resolve(model.path), model)
+  return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+async function pickModelDirectory(): Promise<string> {
+  if (!mainWindow) return ''
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择额外的 GGUF 模型目录',
+    properties: ['openDirectory']
+  })
+  if (result.canceled || result.filePaths.length === 0) return ''
+  return result.filePaths[0]
+}
+
+async function openWorkspaceFolder(key: WorkspaceDirKey): Promise<string> {
+  const dirs = workspaceDirs()
+  const target = dirs[key]
+  if (!target) return '未知目录'
+  await mkdir(target, { recursive: true })
+  return shell.openPath(target)
 }
 
 async function importLocalModel(): Promise<LocalModelInfo[]> {
@@ -911,7 +971,7 @@ async function getLocalStatus(): Promise<{
   loaded: boolean
   modelPath: string
   supportedGpuTypes: Array<string | false>
-  rootDirs: Record<'models' | 'plugins' | 'chats' | 'cache' | 'characterCards', string>
+  rootDirs: Record<WorkspaceDirKey, string>
 }> {
   let supportedGpuTypes: Array<string | false> = []
   try {
@@ -1053,6 +1113,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('pet:import-local-model', () => {
     return importLocalModel()
+  })
+
+  ipcMain.handle('pet:pick-model-directory', () => {
+    return pickModelDirectory()
+  })
+
+  ipcMain.handle('pet:open-folder', (_event, key: WorkspaceDirKey) => {
+    return openWorkspaceFolder(key)
   })
 
   ipcMain.handle('pet:get-local-status', () => {
