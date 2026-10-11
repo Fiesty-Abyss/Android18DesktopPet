@@ -811,7 +811,11 @@ async function saveSettings(): Promise<void> {
 
   apiKeyInput.value = ''
   applyConfig(next)
-  void refreshLocalModels()
+  await refreshLocalModels()
+  // 新加的目录里扫到了模型、但之前还没选过模型时，自动记住列表里的第一个
+  if (!config.local.modelPath && localModelSelect.value) {
+    applyConfig(await window.pet.saveConfig({ local: { modelPath: localModelSelect.value } }))
+  }
   settingsStatus.textContent = '已保存'
   settingsStatus.dataset.kind = 'ok'
   say(`${config.characterCard.name} 的设置已经更新。`)

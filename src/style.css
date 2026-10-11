@@ -487,7 +487,7 @@ textarea {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
 
-.dir-editor textarea {
+.card-editor.dir-editor textarea {
   min-height: 58px;
   max-height: 120px;
   font-family: ui-monospace, Consolas, monospace;
