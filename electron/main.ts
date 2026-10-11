@@ -533,7 +533,8 @@ function cloudErrorHint(status: number): string {
 
 async function askCloudApi(history: ChatMessage[], config = getConfig()): Promise<string> {
   if (!config.apiKey) {
-    return '还没绑定 DeepSeek API key。右键我，打开设置，把 key 填进去。'
+    // 用异常返回提示，避免这句配置提示被当成角色回复写进聊天记忆
+    throw new Error('还没绑定 API Key。右键我打开设置，把 key 填进去。')
   }
 
   let response: Response

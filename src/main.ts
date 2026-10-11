@@ -692,12 +692,8 @@ async function adjustScale(delta: number): Promise<void> {
 }
 
 async function ask(text: string): Promise<void> {
-  const delta = affinityDeltaFrom(text)
-  if (delta !== 0) {
-    await setAffinity(config.affinity + delta)
-  }
-
-  messages.push({ role: 'user', content: text })
+  const userMessage: ChatMessage = { role: 'user', content: text }
+  messages.push(userMessage)
   await persist()
 
   setBusy(true)
@@ -716,6 +712,9 @@ async function ask(text: string): Promise<void> {
     const answer = await window.pet.chat(messages)
     messages.push({ role: 'assistant', content: answer })
     await persist()
+    // 只有真正得到回复时才结算好感度，避免网络失败也加减分
+    const delta = affinityDeltaFrom(text)
+    if (delta !== 0) await setAffinity(config.affinity + delta)
     setMood('happy')
     say(answer)
     await refreshLocalStatus()
@@ -725,6 +724,13 @@ async function ask(text: string): Promise<void> {
     setMood('error')
     const fallback = config.provider === 'local' ? '本地模型没跑起来。检查 GGUF、引擎和显存设置。' : '云端接口没接通。检查 key、网络，或者模型名。'
     say(readableIpcError(error) || fallback)
+    // 发送失败：撤回刚才那句，并把原文放回输入框，方便改完设置后直接重发
+    if (messages.at(-1) === userMessage) {
+      messages.pop()
+      await persist()
+    }
+    if (simModal.open) simPrompt.value = text
+    else promptInput.value = text
   } finally {
     setBusy(false)
     promptInput.focus()
