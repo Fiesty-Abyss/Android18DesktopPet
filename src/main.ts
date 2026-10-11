@@ -35,6 +35,7 @@ app.innerHTML = `
         <button class="icon-button" id="open-settings" title="设置" aria-label="设置">S</button>
         <button class="icon-button" id="toggle-panel" title="隐藏输入区" aria-label="隐藏输入区">_</button>
         <button class="icon-button" id="clear-memory" title="清空记忆" aria-label="清空记忆">C</button>
+        <button class="icon-button" id="hide-window" title="收起到托盘" aria-label="收起到托盘">v</button>
         <button class="icon-button danger" id="close-window" title="关闭" aria-label="关闭">X</button>
       </div>
       <form class="composer" id="composer">
@@ -201,6 +202,10 @@ app.innerHTML = `
           </label>
         </div>
 
+        <div class="toggle-grid">
+          <label><input id="always-on-top" type="checkbox" /> 窗口始终置顶</label>
+        </div>
+
         <label class="range-row">
           <span>整体缩放 <b id="scale-value">100%</b></span>
           <input id="pet-scale" type="range" min="0.7" max="1.45" step="0.05" />
@@ -293,6 +298,8 @@ const openSimButton = document.querySelector<HTMLButtonElement>('#open-sim')!
 const openSettingsButton = document.querySelector<HTMLButtonElement>('#open-settings')!
 const togglePanel = document.querySelector<HTMLButtonElement>('#toggle-panel')!
 const clearMemory = document.querySelector<HTMLButtonElement>('#clear-memory')!
+const hideWindow = document.querySelector<HTMLButtonElement>('#hide-window')!
+const alwaysOnTopInput = document.querySelector<HTMLInputElement>('#always-on-top')!
 const closeWindow = document.querySelector<HTMLButtonElement>('#close-window')!
 const settingsModal = document.querySelector<HTMLDialogElement>('#settings-modal')!
 const settingsForm = document.querySelector<HTMLFormElement>('#settings-form')!
@@ -507,6 +514,7 @@ function applyConfig(nextConfig: RendererConfig): void {
   temperatureInput.value = String(config.temperature)
   maxTokensInput.value = String(config.maxTokens)
   petScaleInput.value = String(config.petScale)
+  alwaysOnTopInput.checked = config.alwaysOnTop
   scaleValue.textContent = `${Math.round(config.petScale * 100)}%`
   characterCardInput.value = characterCardText(config.characterCard)
   apiKeyInput.placeholder = config.apiKeySet ? '已保存 key；留空不修改' : '粘贴 DeepSeek API key'
@@ -766,6 +774,7 @@ async function saveSettings(): Promise<void> {
     temperature: Number(temperatureInput.value),
     maxTokens: Number(maxTokensInput.value),
     petScale: Number(petScaleInput.value),
+    alwaysOnTop: alwaysOnTopInput.checked,
     characterCard,
     local: {
       modelPath: localModelSelect.value,
@@ -1096,6 +1105,18 @@ clearMemory.addEventListener('click', async () => {
   renderHistory()
   setMood('happy')
   say('记忆清空。现在我们重新开始。')
+})
+
+hideWindow.addEventListener('click', () => {
+  window.pet.hide()
+})
+
+window.pet.onOpenSettings(() => {
+  openSettings()
+})
+
+window.pet.onConfigChanged(async () => {
+  applyConfig(await window.pet.getConfig())
 })
 
 closeWindow.addEventListener('click', () => {

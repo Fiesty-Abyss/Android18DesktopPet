@@ -39,6 +39,7 @@ type RendererConfig = {
   modelImagePath: string
   affinity: number
   petScale: number
+  alwaysOnTop: boolean
   local: LocalSettings
   apiKeySet: boolean
   memoryKey: string
@@ -91,6 +92,7 @@ type PetConfigPatch = {
   modelImagePath?: string
   affinity?: number
   petScale?: number
+  alwaysOnTop?: boolean
   local?: Partial<LocalSettings>
 }
 
@@ -117,6 +119,9 @@ interface Window {
     expandPanel: () => void
     restorePetWindow: () => void
     minimize: () => void
+    hide: () => void
+    onOpenSettings: (callback: () => void) => () => void
+    onConfigChanged: (callback: () => void) => () => void
     close: () => void
   }
 }

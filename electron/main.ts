@@ -1,11 +1,13 @@
 import 'dotenv/config'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
 import { existsSync } from 'node:fs'
 import { appendFile, copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import Store from 'electron-store'
 import { is } from '@electron-toolkit/utils'
 import defaultCharacterCardData from '../characters/android18.card.json'
+import trayIconPath from '../assets/tray-icon.png?asset'
+import appIconPath from '../assets/icon.png?asset'
 
 type ChatMessage = {
   role: 'user' | 'assistant'
@@ -64,6 +66,7 @@ type PetConfig = {
   modelImagePath: string
   affinity: number
   petScale: number
+  alwaysOnTop: boolean
   local: LocalSettings
 }
 
@@ -127,10 +130,14 @@ const defaultConfig: PetConfig = {
   modelImagePath: '',
   affinity: 0,
   petScale: 1,
+  alwaysOnTop: true,
   local: defaultLocalSettings
 }
 
+type WindowPosition = { x: number; y: number }
+
 const store = new Store<{
+  windowPosition?: WindowPosition
   config?: Partial<PetConfig>
   messages?: ChatMessage[]
   memories?: Record<string, ChatMessage[]>
@@ -139,6 +146,8 @@ const store = new Store<{
 let mainWindow: BrowserWindow | null = null
 let localRuntime: LocalRuntime | null = null
 let panelExpanded = false
+let tray: Tray | null = null
+let savePositionTimer: NodeJS.Timeout | undefined
 
 function appRootDir(): string {
   if (is.dev) return process.cwd()
@@ -276,6 +285,7 @@ function saveConfig(patch: ConfigPatch): RendererConfig {
     maxTokens: Math.round(clampNumber(patch.maxTokens, 64, 4096, current.maxTokens)),
     affinity: Math.round(clampNumber(patch.affinity, -100, 100, current.affinity)),
     petScale: clampNumber(patch.petScale, 0.7, 1.45, current.petScale),
+    alwaysOnTop: typeof patch.alwaysOnTop === 'boolean' ? patch.alwaysOnTop : current.alwaysOnTop,
     characterId: typeof patch.characterId === 'string' ? patch.characterId : current.characterId,
     characterPngPath: typeof patch.characterPngPath === 'string' ? patch.characterPngPath : current.characterPngPath,
     characterCard: mergeCharacterCard(patch.characterCard || current.characterCard),
@@ -285,6 +295,10 @@ function saveConfig(patch: ConfigPatch): RendererConfig {
   store.set('config', next)
   if (Object.prototype.hasOwnProperty.call(patch, 'petScale') && !panelExpanded) {
     applyWindowScale(next.petScale)
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'alwaysOnTop')) {
+    mainWindow?.setAlwaysOnTop(next.alwaysOnTop)
+    refreshTrayMenu()
   }
   return toRendererConfig(next)
 }
@@ -408,12 +422,130 @@ function applyWindowScale(scale = getConfig().petScale): void {
   const height = Math.round(650 * scale)
   mainWindow.setMinimumSize(Math.round(340 * scale), Math.round(500 * scale))
   mainWindow.setSize(width, height)
+  keepWindowOnScreen()
+}
+
+/** 窗口尺寸变化（展开设置面板、切换显示器）后，把窗口拉回当前显示器的可见区域 */
+function keepWindowOnScreen(): void {
+  if (!mainWindow) return
+  const bounds = mainWindow.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  const x = Math.min(Math.max(bounds.x, area.x), area.x + Math.max(0, area.width - bounds.width))
+  const y = Math.min(Math.max(bounds.y, area.y), area.y + Math.max(0, area.height - bounds.height))
+  if (x !== bounds.x || y !== bounds.y) mainWindow.setPosition(x, y)
+}
+
+function savedWindowPosition(width: number, height: number): WindowPosition | undefined {
+  const saved = store.get('windowPosition')
+  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return undefined
+  // 显示器拔掉或分辨率变化后，旧坐标可能落在屏幕外，这时退回默认位置
+  const visible = screen.getAllDisplays().some(({ workArea }) => {
+    return (
+      saved.x + width > workArea.x + 40 &&
+      saved.x < workArea.x + workArea.width - 40 &&
+      saved.y >= workArea.y - 20 &&
+      saved.y < workArea.y + workArea.height - 60
+    )
+  })
+  return visible ? saved : undefined
+}
+
+function rememberWindowPosition(): void {
+  if (!mainWindow || panelExpanded) return
+  clearTimeout(savePositionTimer)
+  savePositionTimer = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || panelExpanded) return
+    const [x, y] = mainWindow.getPosition()
+    store.set('windowPosition', { x, y })
+  }, 400)
+}
+
+function resetWindowPosition(): void {
+  if (!mainWindow) return
+  store.delete('windowPosition')
+  const area = screen.getPrimaryDisplay().workArea
+  const [width, height] = mainWindow.getSize()
+  mainWindow.setPosition(area.x + area.width - width - 40, area.y + area.height - height - 20)
+  showPetWindow()
+}
+
+function showPetWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  refreshTrayMenu()
+}
+
+function togglePetWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    mainWindow.hide()
+    refreshTrayMenu()
+  } else {
+    showPetWindow()
+  }
+}
+
+function refreshTrayMenu(): void {
+  if (!tray) return
+  const config = getConfig()
+  const visible = Boolean(mainWindow?.isVisible() && !mainWindow?.isMinimized())
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: visible ? '隐藏桌宠' : '显示桌宠', click: togglePetWindow },
+      {
+        label: '打开设置',
+        click: () => {
+          showPetWindow()
+          mainWindow?.webContents.send('pet:open-settings')
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '始终置顶',
+        type: 'checkbox',
+        checked: config.alwaysOnTop,
+        click: (item) => {
+          saveConfig({ alwaysOnTop: item.checked })
+          mainWindow?.webContents.send('pet:config-changed')
+        }
+      },
+      { label: '重置窗口位置', click: resetWindowPosition },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => app.quit()
+      }
+    ])
+  )
+}
+
+function createTray(): void {
+  try {
+    const icon = nativeImage.createFromPath(trayIconPath)
+    tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 20, height: 20 }))
+    tray.setToolTip(`${getConfig().characterCard.name} · 桌宠`)
+    tray.on('click', togglePetWindow)
+    refreshTrayMenu()
+  } catch (error) {
+    // 部分 Linux 桌面没有系统托盘，失败时不影响桌宠本体
+    console.warn('[tray] unavailable', error)
+    tray = null
+  }
 }
 
 function createWindow(): void {
+  const config = getConfig()
+  const initialWidth = Math.round(430 * config.petScale)
+  const initialHeight = Math.round(650 * config.petScale)
+  const position = savedWindowPosition(initialWidth, initialHeight)
   mainWindow = new BrowserWindow({
-    width: 430,
-    height: 650,
+    width: initialWidth,
+    height: initialHeight,
+    ...(position || {}),
+    icon: appIconPath,
+    title: 'Android 18 Desktop Pet',
     minWidth: 360,
     minHeight: 520,
     frame: false,
@@ -421,7 +553,7 @@ function createWindow(): void {
     backgroundColor: '#00000000',
     hasShadow: false,
     resizable: true,
-    alwaysOnTop: true,
+    alwaysOnTop: config.alwaysOnTop,
     skipTaskbar: false,
     show: false,
     webPreferences: {
@@ -435,6 +567,14 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', () => {
     applyWindowScale()
     mainWindow?.show()
+  })
+
+  // 'moved' 只在 Windows/macOS 触发，Linux 只有 'move'，这里统一用 'move' + 防抖
+  mainWindow.on('move', rememberWindowPosition)
+  mainWindow.on('show', refreshTrayMenu)
+  mainWindow.on('hide', refreshTrayMenu)
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
@@ -1055,9 +1195,20 @@ async function setCurrentMessages(messages: ChatMessage[], config = getConfig())
   await writeChatSnapshot(saved, config)
 }
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    showPetWindow()
+  })
+}
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return
   await ensureWorkspaceFolders()
   createWindow()
+  createTray()
 
   ipcMain.handle('pet:chat', async (_event, history: ChatMessage[]) => {
     return askAssistant(history)
@@ -1137,9 +1288,14 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.on('window:expand-panel', () => {
+    if (!mainWindow) return
     panelExpanded = true
-    mainWindow?.setMinimumSize(720, 620)
-    mainWindow?.setSize(960, 820)
+    const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+    const width = Math.min(960, area.width)
+    const height = Math.min(820, area.height)
+    mainWindow.setMinimumSize(Math.min(720, width), Math.min(620, height))
+    mainWindow.setSize(width, height)
+    keepWindowOnScreen()
   })
 
   ipcMain.on('window:restore-pet', () => {
@@ -1148,7 +1304,12 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.on('window:close', () => {
-    mainWindow?.close()
+    app.quit()
+  })
+
+  ipcMain.on('window:hide', () => {
+    if (tray) mainWindow?.hide()
+    else mainWindow?.minimize()
   })
 
   app.on('activate', () => {
@@ -1157,6 +1318,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', async () => {
+  tray?.destroy()
+  tray = null
   await disposeLocalRuntime()
   if (process.platform !== 'darwin') app.quit()
 })

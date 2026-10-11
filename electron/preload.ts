@@ -41,6 +41,7 @@ type PetConfigPatch = {
   modelImagePath?: string
   affinity?: number
   petScale?: number
+  alwaysOnTop?: boolean
   local?: Partial<LocalSettings>
 }
 
@@ -82,6 +83,17 @@ const petAPI = {
   expandPanel: () => ipcRenderer.send('window:expand-panel'),
   restorePetWindow: () => ipcRenderer.send('window:restore-pet'),
   minimize: () => ipcRenderer.send('window:minimize'),
+  hide: () => ipcRenderer.send('window:hide'),
+  onOpenSettings: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('pet:open-settings', listener)
+    return () => ipcRenderer.removeListener('pet:open-settings', listener)
+  },
+  onConfigChanged: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('pet:config-changed', listener)
+    return () => ipcRenderer.removeListener('pet:config-changed', listener)
+  },
   close: () => ipcRenderer.send('window:close')
 }
 
