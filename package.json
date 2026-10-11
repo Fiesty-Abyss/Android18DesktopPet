@@ -52,6 +52,13 @@
         ]
       },
       {
+        "from": "plugins",
+        "to": "plugins",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "models/README.md",
         "to": "models/README.md"
       }
