@@ -309,9 +309,16 @@ function buildSystemPrompt(config: PetConfig): string {
     .join('\n')
 }
 
-function stripRoleplayArtifacts(text: string): string {
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function stripRoleplayArtifacts(text: string, characterName = ''): string {
+  const names = ['人造人18号', '18号', 'Android\\s*18', 'assistant', 'AI']
+  if (characterName.trim()) names.unshift(escapeRegExp(characterName.trim()))
+  const speakerPrefix = new RegExp(`^(?:${names.join('|')})\\s*[:：]\\s*`, 'i')
   return text
-    .replace(/^(人造人18号|18号|Android\s*18|assistant|AI)\s*[:：]\s*/i, '')
+    .replace(speakerPrefix, '')
     .replace(/作为(?:一个)?(?:AI|人工智能|语言模型|模型|程序)[^。！？\n]*(?:[。！？]|\n|$)/g, '')
     .replace(/我(?:是|只是)(?:一个)?(?:AI|人工智能|语言模型|模型|程序)[^。！？\n]*(?:[。！？]|\n|$)/g, '')
     .trim()
@@ -364,7 +371,7 @@ function trimRepeatedTail(text: string): string {
 
 function postProcessAnswer(answer: string, config: PetConfig): string {
   const limit = config.interactionMode === 'simulation' ? 900 : 480
-  let text = stripRoleplayArtifacts(answer)
+  let text = stripRoleplayArtifacts(answer, config.characterCard.name)
   text = trimRepeatedChunks(text)
   text = trimRepeatedTail(text)
   if (text.length > limit) {
@@ -420,34 +427,53 @@ function chatEndpoint(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/chat/completions`
 }
 
+function cloudErrorHint(status: number): string {
+  if (status === 400) return '请求参数不被接受（400），检查模型名和回复长度。'
+  if (status === 401) return 'API Key 无效（401），去设置里重新填写。'
+  if (status === 402) return '账户余额不足（402），充值后再试。'
+  if (status === 404) return '接口地址或模型不存在（404），检查 Base URL 和模型名。'
+  if (status === 422) return '参数格式错误（422），检查温度和回复长度。'
+  if (status === 429) return '请求太频繁或额度受限（429），稍后再试。'
+  if (status >= 500) return `服务端暂时不可用（${status}），过一会儿再试。`
+  return `云端接口返回错误（${status}）。`
+}
+
 async function askCloudApi(history: ChatMessage[], config = getConfig()): Promise<string> {
   if (!config.apiKey) {
     return '还没绑定 DeepSeek API key。右键我，打开设置，把 key 填进去。'
   }
 
-  const response = await fetch(chatEndpoint(config.baseUrl), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildSystemPrompt(config)
-        },
-        ...history.slice(-14)
-      ],
-      temperature: config.temperature,
-      max_tokens: config.maxTokens
+  let response: Response
+  try {
+    response = await fetch(chatEndpoint(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: 'system',
+            content: buildSystemPrompt(config)
+          },
+          ...history.slice(-14)
+        ],
+        temperature: config.temperature,
+        max_tokens: config.maxTokens
+      }),
+      signal: AbortSignal.timeout(90_000)
     })
-  })
+  } catch (error) {
+    console.error('[cloud-api] request failed', error)
+    throw new Error('连不上云端接口：检查网络、代理或 Base URL。')
+  }
 
   if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(`DeepSeek API ${response.status}: ${detail.slice(0, 300)}`)
+    const detail = await response.text().catch(() => '')
+    console.error(`[cloud-api] ${response.status}: ${detail.slice(0, 300)}`)
+    throw new Error(cloudErrorHint(response.status))
   }
 
   const data = (await response.json()) as {
@@ -903,8 +929,12 @@ async function getLocalStatus(): Promise<{
   }
 }
 
-function dayStamp(): string {
-  return new Date().toISOString().slice(0, 10)
+function dayStamp(date = new Date()): string {
+  // 按本地日期切分日志，避免 UTC 跨日导致晚上的聊天写进“明天”的文件
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function currentMessages(config = getConfig()): ChatMessage[] {

@@ -683,11 +683,18 @@ async function ask(text: string): Promise<void> {
   } catch (error) {
     console.error(error)
     setMood('error')
-    say(config.provider === 'local' ? '本地模型没跑起来。检查 GGUF、引擎和显存设置。' : 'DeepSeek 没接通。检查 key、网络，或者模型名。')
+    const fallback = config.provider === 'local' ? '本地模型没跑起来。检查 GGUF、引擎和显存设置。' : '云端接口没接通。检查 key、网络，或者模型名。'
+    say(readableIpcError(error) || fallback)
   } finally {
     setBusy(false)
     promptInput.focus()
   }
+}
+
+function readableIpcError(error: unknown): string {
+  if (!(error instanceof Error)) return ''
+  // ipcRenderer.invoke 会把主进程异常包装成 "Error invoking remote method 'x': Error: 原因"
+  return error.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '').trim()
 }
 
 function openSettings(): void {
@@ -931,6 +938,10 @@ generateStory.addEventListener('click', async () => {
     storyContextInput.value = story
     const next = await window.pet.saveConfig({ interactionMode: 'simulation', storyContext: story })
     applyConfig(next)
+  } catch (error) {
+    console.error(error)
+    setMood('error')
+    say(readableIpcError(error) || '剧情生成失败，检查模型设置后再试。')
   } finally {
     generateStory.disabled = false
     generateStory.textContent = oldText
@@ -1053,10 +1064,11 @@ devForm.addEventListener('submit', (event) => {
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    const hadPanel = settingsModal.open || simModal.open
     if (settingsModal.open) settingsModal.close()
     if (devModal.open) devModal.close()
     if (simModal.open) simModal.close()
-    window.pet.restorePetWindow()
+    if (hadPanel) window.pet.restorePetWindow()
     if (historyPanel.classList.contains('open')) historyPanel.classList.remove('open')
     promptInput.blur()
   }
