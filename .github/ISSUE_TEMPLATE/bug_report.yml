@@ -1,0 +1,54 @@
+name: 问题反馈
+description: 程序报错、崩溃或行为不符合预期
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 提交前请先看一下 README 的「已知限制」和 models/README.md，很多本地模型问题在那里有说明。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 设置面板标题栏或 CHANGELOG 中的版本号
+      placeholder: v0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统
+      options: [Windows 11, Windows 10, Linux, macOS, 其它]
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: 推理来源
+      options: [云端 API, 本地 GGUF, 与推理无关]
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: 模型 / 显卡（本地推理时填写）
+      placeholder: L3-8B-Stheno-v3.2-Q4_K_M.gguf / RTX 4060 8GB / CUDA
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开设置
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息 / 截图
+      description: 气泡里的报错文字、开发者模式下的日志等。请不要贴出 API Key。
