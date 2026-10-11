@@ -20,14 +20,9 @@ import type {
   RendererConfig,
   WorkspaceDirKey
 } from '../shared/types'
+import type { LlmChatTurn } from '../shared/llm-protocol'
+import { LocalLlmClient } from './llm-client'
 
-type LocalRuntime = {
-  key: string
-  llama: any
-  model: any
-  context: any
-  session: any
-}
 
 const defaultCharacterCard = defaultCharacterCardData as CharacterCard
 
@@ -76,7 +71,7 @@ const store = new Store<{
 }>()
 
 let mainWindow: BrowserWindow | null = null
-let localRuntime: LocalRuntime | null = null
+const localLlm = new LocalLlmClient()
 let panelExpanded = false
 let tray: Tray | null = null
 let savePositionTimer: NodeJS.Timeout | undefined
@@ -582,71 +577,17 @@ async function askCloudApi(history: ChatMessage[], config = getConfig()): Promis
   return postProcessAnswer(data.choices?.[0]?.message?.content?.trim() || '我刚刚短路了一下。再说一遍？', config)
 }
 
-async function loadNodeLlama(): Promise<any> {
-  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>
-  return dynamicImport('node-llama-cpp')
-}
-
-function gpuOption(local: LocalSettings): 'auto' | 'cuda' | 'vulkan' | false {
-  if (local.gpuBackend === 'cpu') return false
-  return local.gpuBackend
-}
-
-function vramPadding(local: LocalSettings): number | undefined {
-  if (local.gpuBackend === 'cpu') return undefined
-  if (local.allowSharedMemory) return 256 * 1024 * 1024
-  if (local.vramMode === 'high') return 512 * 1024 * 1024
-  if (local.vramMode === 'low') return 1536 * 1024 * 1024
-  return 1024 * 1024 * 1024
-}
-
-function gpuLayersOption(local: LocalSettings): unknown {
-  if (local.gpuBackend === 'cpu' || local.vramMode === 'low') return 0
-  if (local.vramMode === 'high') return 'max'
-  if (local.vramMode === 'medium') {
-    return {
-      min: 8,
-      max: 28,
-      fitContext: { contextSize: local.contextSize }
-    }
-  }
-  return {
-    min: 0,
-    max: 999,
-    fitContext: { contextSize: local.contextSize }
-  }
-}
-
-function localRuntimeKey(config: PetConfig): string {
-  const local = config.local
-  return JSON.stringify({
-    modelPath: local.modelPath,
-    gpuBackend: local.gpuBackend,
-    vramMode: local.vramMode,
-    contextSize: local.contextSize,
-    batchSize: local.batchSize,
-    threads: local.threads,
-    flashAttention: local.flashAttention,
-    useMmap: local.useMmap,
-    useMlock: local.useMlock,
-    allowSharedMemory: local.allowSharedMemory,
-    kvCacheType: local.kvCacheType
+function toLlamaChatTurns(history: ChatMessage[]): LlmChatTurn[] {
+  // 最后一条是本次要问的话，单独作为 prompt 传，不放进历史
+  return history.slice(-14, -1).map((message): LlmChatTurn => {
+    if (message.role === 'user') return { type: 'user', text: message.content }
+    return { type: 'model', response: [message.content] }
   })
 }
 
-async function disposeLocalRuntime(): Promise<void> {
-  if (!localRuntime) return
-  try {
-    localRuntime.session?.dispose?.({ disposeSequence: true })
-    localRuntime.context?.dispose?.()
-    localRuntime.model?.dispose?.()
-    localRuntime.llama?.dispose?.()
-  } finally {
-    localRuntime = null
-  }
-}
-
-async function ensureLocalRuntime(config = getConfig()): Promise<LocalRuntime> {
+async function askLocalModel(history: ChatMessage[], config = getConfig()): Promise<string> {
+  const prompt = [...history].reverse().find((message) => message.role === 'user')?.content?.trim()
+  if (!prompt) return '你刚刚什么都没说。'
   if (!config.local.modelPath) {
     throw new Error('还没有选择 GGUF 模型。右键打开设置，切到本地 GGUF 后选择模型。')
   }
@@ -654,86 +595,16 @@ async function ensureLocalRuntime(config = getConfig()): Promise<LocalRuntime> {
     throw new Error(`模型文件不存在：${config.local.modelPath}`)
   }
 
-  const key = localRuntimeKey(config)
-  if (localRuntime?.key === key) return localRuntime
-
-  await disposeLocalRuntime()
-
-  const { getLlama, LlamaChatSession } = await loadNodeLlama()
-  const llama = await getLlama({
-    gpu: gpuOption(config.local),
-    vramPadding: vramPadding(config.local)
-  })
-
-  const model = await llama.loadModel({
-    modelPath: config.local.modelPath,
-    gpuLayers: gpuLayersOption(config.local),
-    useMmap: config.local.useMmap,
-    useMlock: config.local.useMlock,
-    defaultContextFlashAttention: config.local.flashAttention,
-    ignoreMemorySafetyChecks: config.local.allowSharedMemory,
-    experimentalDefaultContextKvCacheKeyType: config.local.kvCacheType,
-    experimentalDefaultContextKvCacheValueType: config.local.kvCacheType
-  })
-
-  const context = await model.createContext({
-    contextSize: config.local.contextSize,
-    batchSize: config.local.batchSize,
-    threads: config.local.threads === 0 ? undefined : config.local.threads,
-    flashAttention: config.local.flashAttention,
-    ignoreMemorySafetyChecks: config.local.allowSharedMemory,
-    failedCreationRemedy: { retries: 4 }
-  })
-
-  const session = new LlamaChatSession({
-    contextSequence: context.getSequence(),
-    forceAddSystemPrompt: true
-  })
-
-  localRuntime = { key, llama, model, context, session }
-  return localRuntime
-}
-
-function toLlamaChatHistory(history: ChatMessage[], config = getConfig()): any[] {
-  const prior = history.slice(-14, -1).map((message) => {
-    if (message.role === 'user') return { type: 'user', text: message.content }
-    return { type: 'model', response: [message.content] }
-  })
-  return [{ type: 'system', text: buildSystemPrompt(config) }, ...prior]
-}
-
-async function askLocalModel(history: ChatMessage[], config = getConfig()): Promise<string> {
-  const prompt = [...history].reverse().find((message) => message.role === 'user')?.content?.trim()
-  if (!prompt) return '你刚刚什么都没说。'
-
-  const runtime = await ensureLocalRuntime(config)
-  runtime.session.setChatHistory(toLlamaChatHistory(history, config))
-
-  const answer = await runtime.session.prompt(prompt, {
+  const answer = await localLlm.prompt({
+    local: config.local,
+    systemPrompt: buildSystemPrompt(config),
+    priorTurns: toLlamaChatTurns(history),
+    prompt,
     maxTokens: Math.min(config.maxTokens, config.interactionMode === 'simulation' ? 520 : 260),
-    temperature: config.temperature,
-    topK: 40,
-    topP: 0.92,
-    minP: 0.06,
-    repeatPenalty: {
-      lastTokens: 192,
-      penalty: 1.18,
-      frequencyPenalty: 0.08,
-      presencePenalty: 0.08,
-      penalizeNewLine: false
-    },
-    dryRepeatPenalty: {
-      strength: 0.82,
-      base: 1.9,
-      allowedLength: 2,
-      lastTokens: 512,
-      sequenceBreakers: ['\n', '。', '！', '？', '，']
-    },
-    trimWhitespaceSuffix: true,
-    customStopTriggers: ['我们是独立的生物，我们是独立的生物', '我是独立的生物，我是独立的生物']
+    temperature: config.temperature
   })
 
-  return postProcessAnswer(String(answer).trim() || '本地模型刚才沉默了。再问一次？', config)
+  return postProcessAnswer(answer.trim() || '本地模型刚才沉默了。再问一次？', config)
 }
 
 async function askAssistant(history: ChatMessage[]): Promise<string> {
@@ -1047,18 +918,10 @@ async function importLocalModel(): Promise<LocalModelInfo[]> {
 }
 
 async function getLocalStatus(): Promise<LocalStatus> {
-  let supportedGpuTypes: Array<string | false> = []
-  try {
-    const { getLlamaGpuTypes } = await loadNodeLlama()
-    supportedGpuTypes = await getLlamaGpuTypes()
-  } catch {
-    supportedGpuTypes = []
-  }
-
   return {
-    loaded: Boolean(localRuntime),
-    modelPath: localRuntime ? getConfig().local.modelPath : '',
-    supportedGpuTypes,
+    loaded: localLlm.isLoaded,
+    modelPath: localLlm.isLoaded ? getConfig().local.modelPath : '',
+    supportedGpuTypes: await localLlm.gpuTypes(),
     rootDirs: workspaceDirs()
   }
 }
@@ -1264,7 +1127,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('pet:unload-local-model', async () => {
-    await disposeLocalRuntime()
+    await localLlm.unload()
     return getLocalStatus()
   })
 
@@ -1305,6 +1168,6 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', async () => {
   tray?.destroy()
   tray = null
-  await disposeLocalRuntime()
+  localLlm.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
