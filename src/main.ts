@@ -19,7 +19,7 @@ if (!app) {
 app.innerHTML = `
   <main class="pet-window">
     <section class="pet-stage" id="pet-stage" aria-label="desktop pet">
-      <div class="bubble" id="bubble"></div>
+      <div class="bubble" id="bubble"><div class="bubble-text" id="bubble-text"></div></div>
       <img class="pet-avatar" id="pet-avatar" src="${bundledPetImage}" alt="desktop pet" />
     </section>
 
@@ -290,6 +290,7 @@ app.innerHTML = `
 `
 
 const bubble = document.querySelector<HTMLDivElement>('#bubble')!
+const bubbleText = document.querySelector<HTMLDivElement>('#bubble-text')!
 const avatar = document.querySelector<HTMLImageElement>('#pet-avatar')!
 const petStage = document.querySelector<HTMLElement>('#pet-stage')!
 const chatHandle = document.querySelector<HTMLButtonElement>('#chat-handle')!
@@ -397,7 +398,8 @@ function formatBytes(bytes: number): string {
 }
 
 function say(text: string): void {
-  bubble.textContent = text
+  bubbleText.textContent = text
+  bubbleText.scrollTop = 0
   bubble.classList.remove('pop')
   void bubble.offsetWidth
   bubble.classList.add('pop')
