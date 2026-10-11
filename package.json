@@ -1,6 +1,6 @@
 {
   "name": "android-18-desktop-pet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Electron 透明桌宠 + AI 对话：云端 API / 本地 GGUF、角色卡、好感度、对话模拟。",
   "main": "out/main/main.js",
   "type": "module",
