@@ -25,6 +25,8 @@ export type CharacterCardInfo = {
   pngPath: string
   hasJson: boolean
   hasPng: boolean
+  /** PNG 内嵌了 SillyTavern 角色卡（chara / ccv3 文本块） */
+  embeddedSpec: 'v2' | 'v3' | ''
   source: 'builtin' | 'library'
 }
 
@@ -92,4 +94,16 @@ export type LocalStatus = {
   modelPath: string
   supportedGpuTypes: Array<string | false>
   rootDirs: Record<WorkspaceDirKey, string>
+}
+
+export type CardImportResult = {
+  imported: string[]
+  skipped: string[]
+  message: string
+}
+
+export type FileActionResult = {
+  ok: boolean
+  path?: string
+  message: string
 }

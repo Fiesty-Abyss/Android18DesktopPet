@@ -8,11 +8,15 @@ import { is } from '@electron-toolkit/utils'
 import defaultCharacterCardData from '../characters/android18.card.json'
 import trayIconPath from '../assets/tray-icon.png?asset'
 import appIconPath from '../assets/icon.png?asset'
+import bundledPetImagePath from '../assets/android18-chibi.png?asset'
+import { isPng, readPngCharacterCard, writePngCharacterCard } from './png-card'
 import type {
+  CardImportResult,
   CharacterCard,
   CharacterCardInfo,
   ChatMessage,
   ConfigPatch,
+  FileActionResult,
   LocalModelInfo,
   LocalSettings,
   LocalStatus,
@@ -652,10 +656,31 @@ function readableCardName(baseName: string): string {
     .trim()
 }
 
+const NATIVE_CARD_EXTENSION = 'android18_desktop_pet'
+
+function nativeCardFromExtensions(data: Record<string, unknown>): CharacterCard | null {
+  const extensions = data.extensions
+  if (!extensions || typeof extensions !== 'object') return null
+  const native = (extensions as Record<string, unknown>)[NATIVE_CARD_EXTENSION]
+  if (!native || typeof native !== 'object') return null
+  const card = native as Partial<CharacterCard>
+  if (typeof card.name !== 'string' || !card.name.trim()) return null
+  return mergeCharacterCard(card)
+}
+
 function normalizeImportedCharacterCard(raw: unknown, fallbackName: string): CharacterCard {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const data =
     source.data && typeof source.data === 'object' ? (source.data as Record<string, unknown>) : source
+
+  // 本程序自己导出的卡会在 extensions 里带一份原始设定，优先使用以做到无损往返
+  const native = nativeCardFromExtensions(data)
+  if (native) return native
+
+  // 本程序的“手写角色卡”格式（name / persona / speechStyle ...）直接合并
+  if (typeof data.persona === 'string' && Array.isArray(data.speechStyle)) {
+    return mergeCharacterCard(data as Partial<CharacterCard>)
+  }
 
   const name = textValue(data.name || source.name, 120) || readableCardName(fallbackName) || fallbackName
   const description = textValue(data.description || data.persona || data.prompt, 12000)
@@ -696,6 +721,14 @@ async function readCharacterJson(path: string, fallbackName: string): Promise<Ch
   return normalizeImportedCharacterCard(raw, fallbackName)
 }
 
+async function readEmbeddedCard(pngPath: string): Promise<{ spec: 'v2' | 'v3'; card: unknown } | null> {
+  try {
+    return readPngCharacterCard(await readFile(pngPath))
+  } catch {
+    return null
+  }
+}
+
 async function scanCharacterCards(): Promise<CharacterCardInfo[]> {
   await ensureWorkspaceFolders()
   const libraryDir = workspaceDirs().characterCards
@@ -722,18 +755,22 @@ async function scanCharacterCards(): Promise<CharacterCardInfo[]> {
       pngPath: '',
       hasJson: true,
       hasPng: false,
+      embeddedSpec: '',
       source: 'builtin'
     }
   ]
 
   for (const [baseName, files] of grouped) {
     let name = readableCardName(baseName) || baseName
+    const embedded = files.pngPath ? await readEmbeddedCard(files.pngPath) : null
     if (files.jsonPath) {
       try {
         name = (await readCharacterJson(files.jsonPath, baseName)).name || name
       } catch {
         name = `${name}（JSON 解析失败）`
       }
+    } else if (embedded) {
+      name = normalizeImportedCharacterCard(embedded.card, baseName).name || name
     }
     cards.push({
       id: `library:${baseName}`,
@@ -743,6 +780,7 @@ async function scanCharacterCards(): Promise<CharacterCardInfo[]> {
       pngPath: files.pngPath,
       hasJson: Boolean(files.jsonPath),
       hasPng: Boolean(files.pngPath),
+      embeddedSpec: embedded?.spec || '',
       source: 'library'
     })
   }
@@ -764,9 +802,12 @@ async function selectCharacterCard(characterId: string): Promise<RendererConfig>
   }
 
   const current = getConfig()
+  const embedded = !selected.jsonPath && selected.pngPath ? await readEmbeddedCard(selected.pngPath) : null
   const characterCard = selected.jsonPath
     ? await readCharacterJson(selected.jsonPath, selected.baseName)
-    : {
+    : embedded
+      ? normalizeImportedCharacterCard(embedded.card, selected.baseName)
+      : {
         ...current.characterCard,
         name: selected.name || current.characterCard.name,
         greeting: current.characterCard.greeting || `${selected.name}看了过来。`
@@ -777,6 +818,104 @@ async function selectCharacterCard(characterId: string): Promise<RendererConfig>
     characterPngPath: selected.pngPath || '',
     characterCard
   })
+}
+
+function uniqueDestination(dir: string, fileName: string): string {
+  const ext = extname(fileName)
+  const base = safeFilePart(basename(fileName, ext)) || 'card'
+  let candidate = join(dir, `${base}${ext.toLowerCase()}`)
+  let index = 2
+  while (existsSync(candidate)) {
+    candidate = join(dir, `${base}_${index}${ext.toLowerCase()}`)
+    index += 1
+  }
+  return candidate
+}
+
+async function importCharacterCards(): Promise<CardImportResult> {
+  if (!mainWindow) return { imported: [], skipped: [], message: '窗口未就绪。' }
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '导入角色卡（JSON 或 SillyTavern PNG）',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '角色卡', extensions: ['json', 'png'] }]
+  })
+  if (result.canceled || result.filePaths.length === 0) return { imported: [], skipped: [], message: '已取消导入。' }
+
+  await ensureWorkspaceFolders()
+  const libraryDir = workspaceDirs().characterCards
+  const imported: string[] = []
+  const skipped: string[] = []
+
+  for (const source of result.filePaths) {
+    const ext = extname(source).toLowerCase()
+    try {
+      const bytes = await readFile(source)
+      if (ext === '.json') {
+        JSON.parse(bytes.toString('utf8'))
+      } else if (ext === '.png') {
+        if (!isPng(bytes)) throw new Error('不是有效的 PNG')
+      } else {
+        throw new Error('不支持的文件类型')
+      }
+      if (dirname(source) === libraryDir) {
+        imported.push(basename(source))
+        continue
+      }
+      const destination = uniqueDestination(libraryDir, basename(source))
+      await copyFile(source, destination)
+      imported.push(basename(destination))
+    } catch (error) {
+      skipped.push(`${basename(source)}：${error instanceof Error ? error.message : '读取失败'}`)
+    }
+  }
+
+  const message =
+    `已导入 ${imported.length} 个文件` + (skipped.length ? `，跳过 ${skipped.length} 个（${skipped.join('；')}）` : '') + '。'
+  return { imported, skipped, message }
+}
+
+/** 把当前角色卡导出为 SillyTavern 兼容的 PNG（同时写入 V2 chara 与 V3 ccv3） */
+async function exportCharacterPng(): Promise<FileActionResult> {
+  if (!mainWindow) return { ok: false, message: '窗口未就绪。' }
+  const config = getConfig()
+  const card = config.characterCard
+
+  const customImage = config.modelImagePath && existsSync(config.modelImagePath) ? config.modelImagePath : ''
+  let imagePath = customImage && extname(customImage).toLowerCase() === '.png' ? customImage : bundledPetImagePath
+  if (config.characterPngPath && existsSync(config.characterPngPath)) imagePath = config.characterPngPath
+  const image = await readFile(imagePath)
+  if (!isPng(image)) return { ok: false, message: '当前立绘不是 PNG，无法写入角色卡。' }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出 PNG 角色卡',
+    defaultPath: join(app.getPath('desktop'), `${safeFilePart(card.name) || 'character'}.png`),
+    filters: [{ name: 'PNG 角色卡', extensions: ['png'] }]
+  })
+  if (result.canceled || !result.filePath) return { ok: false, message: '已取消导出。' }
+
+  const data = {
+    name: card.name,
+    description: card.persona,
+    personality: '',
+    scenario: '',
+    first_mes: card.greeting,
+    mes_example: '',
+    creator_notes: 'Exported from Android 18 Desktop Pet',
+    system_prompt: card.systemPrompt,
+    post_history_instructions: [...card.speechStyle, ...card.behaviorRules].join('\n'),
+    alternate_greetings: [],
+    tags: ['android18-desktop-pet'],
+    creator: '',
+    character_version: '',
+    extensions: { [NATIVE_CARD_EXTENSION]: card }
+  }
+  const png = writePngCharacterCard(
+    image,
+    { spec: 'chara_card_v2', spec_version: '2.0', data },
+    { spec: 'chara_card_v3', spec_version: '3.0', data: { ...data, group_only_greetings: [] } }
+  )
+  await writeFile(result.filePath, png)
+  return { ok: true, path: result.filePath, message: `已导出 PNG 角色卡：${basename(result.filePath)}` }
 }
 
 async function getCustomModelImage(): Promise<string | null> {
@@ -1092,6 +1231,14 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('pet:select-character-card', (_event, characterId: string) => {
     return selectCharacterCard(characterId)
+  })
+
+  ipcMain.handle('pet:import-character-cards', () => {
+    return importCharacterCards()
+  })
+
+  ipcMain.handle('pet:export-character-png', () => {
+    return exportCharacterPng()
   })
 
   ipcMain.handle('pet:select-model-image', () => {

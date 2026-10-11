@@ -93,6 +93,10 @@ app.innerHTML = `
             <button class="secondary-button" id="refresh-character-cards" type="button">刷新角色库</button>
             <button class="secondary-button" id="open-card-folder" type="button">打开目录</button>
           </div>
+          <div class="inline-actions">
+            <button class="secondary-button" id="import-character-cards" type="button">导入角色卡…</button>
+            <button class="secondary-button" id="export-character-png" type="button">导出为 PNG 角色卡</button>
+          </div>
           <p class="hint-text" id="character-card-hint"></p>
         </section>
 
@@ -340,6 +344,8 @@ const localUseMmap = document.querySelector<HTMLInputElement>('#local-use-mmap')
 const localUseMlock = document.querySelector<HTMLInputElement>('#local-use-mlock')!
 const localSharedMemory = document.querySelector<HTMLInputElement>('#local-shared-memory')!
 const openCardFolder = document.querySelector<HTMLButtonElement>('#open-card-folder')!
+const importCharacterCardsButton = document.querySelector<HTMLButtonElement>('#import-character-cards')!
+const exportCharacterPngButton = document.querySelector<HTMLButtonElement>('#export-character-png')!
 const openModelFolder = document.querySelector<HTMLButtonElement>('#open-model-folder')!
 const exportHistory = document.querySelector<HTMLButtonElement>('#export-history')!
 const openChatFolder = document.querySelector<HTMLButtonElement>('#open-chat-folder')!
@@ -602,7 +608,7 @@ function renderCharacterCards(): void {
     const parts = [
       card.source === 'builtin' ? '内置' : '角色库',
       card.hasJson ? 'JSON' : '',
-      card.hasPng ? 'PNG' : ''
+      card.hasPng ? (card.embeddedSpec ? `PNG 卡 ${card.embeddedSpec.toUpperCase()}` : 'PNG') : ''
     ].filter(Boolean)
     characterSourceSelect.add(new Option(`${card.name} · ${parts.join(' / ')}`, card.id))
   }
@@ -628,7 +634,14 @@ function updateCharacterHint(): void {
     characterCardHint.textContent = '角色库未刷新，或当前角色卡文件不存在。'
     return
   }
-  const fileState = selected.hasJson && selected.hasPng ? 'JSON 和 PNG 已配对' : selected.hasJson ? '只有 JSON' : '只有 PNG'
+  const fileState =
+    selected.hasJson && selected.hasPng
+      ? 'JSON 和 PNG 已配对（设定取自 JSON）'
+      : selected.hasJson
+        ? '只有 JSON'
+        : selected.embeddedSpec
+          ? `PNG 内嵌 ${selected.embeddedSpec.toUpperCase()} 角色卡`
+          : '只有 PNG（没有内嵌设定，仅作背景）'
   characterCardHint.textContent = `${selected.baseName} · ${fileState}。模拟对话模式会自动使用 PNG 背景；桌宠模式只使用角色设定。`
 }
 
@@ -972,6 +985,19 @@ importLocalModelButton.addEventListener('click', async () => {
 
 openCardFolder.addEventListener('click', () => {
   void openFolder('characterCards')
+})
+
+importCharacterCardsButton.addEventListener('click', async () => {
+  const result = await window.pet.importCharacterCards()
+  settingsStatus.textContent = result.message
+  settingsStatus.dataset.kind = result.skipped.length && !result.imported.length ? 'error' : 'ok'
+  if (result.imported.length) await refreshCharacterCards()
+})
+
+exportCharacterPngButton.addEventListener('click', async () => {
+  const result = await window.pet.exportCharacterPng()
+  settingsStatus.textContent = result.message
+  settingsStatus.dataset.kind = result.ok ? 'ok' : 'error'
 })
 
 openModelFolder.addEventListener('click', () => {
