@@ -1,3 +1,3 @@
-# Plugins
+# 插件（预留）
 
-Future desktop-pet plugins can live here.
+预留给以后的桌宠插件，目前程序只会创建这个目录，不会加载其中的内容。

@@ -1,4 +1,13 @@
 import './style.css'
+import type {
+  CharacterCard,
+  CharacterCardInfo,
+  ChatMessage,
+  LocalModelInfo,
+  LocalSettings,
+  RendererConfig,
+  WorkspaceDirKey
+} from '../shared/types'
 import bundledPetImage from '../assets/android18-chibi.png'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -10,7 +19,7 @@ if (!app) {
 app.innerHTML = `
   <main class="pet-window">
     <section class="pet-stage" id="pet-stage" aria-label="desktop pet">
-      <div class="bubble" id="bubble"></div>
+      <div class="bubble" id="bubble"><div class="bubble-text" id="bubble-text"></div></div>
       <img class="pet-avatar" id="pet-avatar" src="${bundledPetImage}" alt="desktop pet" />
     </section>
 
@@ -19,6 +28,8 @@ app.innerHTML = `
     <aside class="history-panel" id="history-panel" aria-label="聊天历史">
       <header class="panel-header">
         <strong>聊天历史</strong>
+        <button class="secondary-button compact" id="export-history" type="button" title="导出为 Markdown / JSON">导出</button>
+        <button class="secondary-button compact" id="open-chat-folder" type="button" title="打开聊天记录目录">目录</button>
         <button class="secondary-button compact" id="clear-history" type="button">清空</button>
         <button class="icon-button" id="close-history" type="button" title="关闭历史" aria-label="关闭历史">X</button>
       </header>
@@ -34,6 +45,7 @@ app.innerHTML = `
         <button class="icon-button" id="open-settings" title="设置" aria-label="设置">S</button>
         <button class="icon-button" id="toggle-panel" title="隐藏输入区" aria-label="隐藏输入区">_</button>
         <button class="icon-button" id="clear-memory" title="清空记忆" aria-label="清空记忆">C</button>
+        <button class="icon-button" id="hide-window" title="收起到托盘" aria-label="收起到托盘">v</button>
         <button class="icon-button danger" id="close-window" title="关闭" aria-label="关闭">X</button>
       </div>
       <form class="composer" id="composer">
@@ -79,6 +91,7 @@ app.innerHTML = `
               <select id="character-source-select"></select>
             </label>
             <button class="secondary-button" id="refresh-character-cards" type="button">刷新角色库</button>
+            <button class="secondary-button" id="open-card-folder" type="button">打开目录</button>
           </div>
           <p class="hint-text" id="character-card-hint"></p>
         </section>
@@ -121,6 +134,16 @@ app.innerHTML = `
             </label>
             <button class="secondary-button" id="refresh-local-models" type="button">刷新</button>
             <button class="secondary-button" id="import-local-model" type="button">导入GGUF</button>
+            <button class="secondary-button" id="open-model-folder" type="button">打开目录</button>
+          </div>
+
+          <label class="card-editor dir-editor">
+            额外模型目录（每行一个，保存后生效；不会复制模型文件）
+            <textarea id="local-extra-dirs" spellcheck="false" placeholder="例如 D:\\LLM\\gguf"></textarea>
+          </label>
+          <div class="inline-actions">
+            <button class="secondary-button" id="add-model-dir" type="button">添加目录…</button>
+            <span class="hint-text" id="local-model-hint"></span>
           </div>
 
           <div class="settings-grid">
@@ -187,6 +210,10 @@ app.innerHTML = `
             温度
             <input id="temperature" type="number" min="0" max="2" step="0.1" />
           </label>
+        </div>
+
+        <div class="toggle-grid">
+          <label><input id="always-on-top" type="checkbox" /> 窗口始终置顶</label>
         </div>
 
         <label class="range-row">
@@ -263,6 +290,7 @@ app.innerHTML = `
 `
 
 const bubble = document.querySelector<HTMLDivElement>('#bubble')!
+const bubbleText = document.querySelector<HTMLDivElement>('#bubble-text')!
 const avatar = document.querySelector<HTMLImageElement>('#pet-avatar')!
 const petStage = document.querySelector<HTMLElement>('#pet-stage')!
 const chatHandle = document.querySelector<HTMLButtonElement>('#chat-handle')!
@@ -281,6 +309,8 @@ const openSimButton = document.querySelector<HTMLButtonElement>('#open-sim')!
 const openSettingsButton = document.querySelector<HTMLButtonElement>('#open-settings')!
 const togglePanel = document.querySelector<HTMLButtonElement>('#toggle-panel')!
 const clearMemory = document.querySelector<HTMLButtonElement>('#clear-memory')!
+const hideWindow = document.querySelector<HTMLButtonElement>('#hide-window')!
+const alwaysOnTopInput = document.querySelector<HTMLInputElement>('#always-on-top')!
 const closeWindow = document.querySelector<HTMLButtonElement>('#close-window')!
 const settingsModal = document.querySelector<HTMLDialogElement>('#settings-modal')!
 const settingsForm = document.querySelector<HTMLFormElement>('#settings-form')!
@@ -309,6 +339,13 @@ const localFlashAttention = document.querySelector<HTMLInputElement>('#local-fla
 const localUseMmap = document.querySelector<HTMLInputElement>('#local-use-mmap')!
 const localUseMlock = document.querySelector<HTMLInputElement>('#local-use-mlock')!
 const localSharedMemory = document.querySelector<HTMLInputElement>('#local-shared-memory')!
+const openCardFolder = document.querySelector<HTMLButtonElement>('#open-card-folder')!
+const openModelFolder = document.querySelector<HTMLButtonElement>('#open-model-folder')!
+const exportHistory = document.querySelector<HTMLButtonElement>('#export-history')!
+const openChatFolder = document.querySelector<HTMLButtonElement>('#open-chat-folder')!
+const localExtraDirs = document.querySelector<HTMLTextAreaElement>('#local-extra-dirs')!
+const addModelDir = document.querySelector<HTMLButtonElement>('#add-model-dir')!
+const localModelHint = document.querySelector<HTMLElement>('#local-model-hint')!
 const localStatus = document.querySelector<HTMLElement>('#local-status')!
 const unloadLocalModel = document.querySelector<HTMLButtonElement>('#unload-local-model')!
 const temperatureInput = document.querySelector<HTMLInputElement>('#temperature')!
@@ -361,7 +398,8 @@ function formatBytes(bytes: number): string {
 }
 
 function say(text: string): void {
-  bubble.textContent = text
+  bubbleText.textContent = text
+  bubbleText.scrollTop = 0
   bubble.classList.remove('pop')
   void bubble.offsetWidth
   bubble.classList.add('pop')
@@ -489,6 +527,7 @@ function applyConfig(nextConfig: RendererConfig): void {
   temperatureInput.value = String(config.temperature)
   maxTokensInput.value = String(config.maxTokens)
   petScaleInput.value = String(config.petScale)
+  alwaysOnTopInput.checked = config.alwaysOnTop
   scaleValue.textContent = `${Math.round(config.petScale * 100)}%`
   characterCardInput.value = characterCardText(config.characterCard)
   apiKeyInput.placeholder = config.apiKeySet ? '已保存 key；留空不修改' : '粘贴 DeepSeek API key'
@@ -508,6 +547,7 @@ function applyConfig(nextConfig: RendererConfig): void {
   localUseMlock.checked = config.local.useMlock
   localSharedMemory.checked = config.local.allowSharedMemory
   localKvCache.value = config.local.kvCacheType
+  localExtraDirs.value = config.local.extraModelDirs.join('\n')
 
   if (knownModels.has(config.model)) {
     modelSelect.value = config.model
@@ -534,11 +574,13 @@ function renderLocalModels(): void {
   if (localModels.length === 0) {
     const option = new Option('没有发现 GGUF 模型', '')
     localModelSelect.add(option)
+    localModelHint.textContent = '把 .gguf 放进 models/，或在上面添加额外目录后点“刷新”。'
     return
   }
 
+  localModelHint.textContent = `共发现 ${localModels.length} 个 GGUF 模型。`
   for (const model of localModels) {
-    const source = model.source === 'library' ? 'models' : 'E:\\mod'
+    const source = model.source === 'library' ? 'models' : model.dir
     const option = new Option(`${model.name} · ${formatBytes(model.size)} · ${source}`, model.path)
     localModelSelect.add(option)
   }
@@ -652,12 +694,8 @@ async function adjustScale(delta: number): Promise<void> {
 }
 
 async function ask(text: string): Promise<void> {
-  const delta = affinityDeltaFrom(text)
-  if (delta !== 0) {
-    await setAffinity(config.affinity + delta)
-  }
-
-  messages.push({ role: 'user', content: text })
+  const userMessage: ChatMessage = { role: 'user', content: text }
+  messages.push(userMessage)
   await persist()
 
   setBusy(true)
@@ -676,6 +714,9 @@ async function ask(text: string): Promise<void> {
     const answer = await window.pet.chat(messages)
     messages.push({ role: 'assistant', content: answer })
     await persist()
+    // 只有真正得到回复时才结算好感度，避免网络失败也加减分
+    const delta = affinityDeltaFrom(text)
+    if (delta !== 0) await setAffinity(config.affinity + delta)
     setMood('happy')
     say(answer)
     await refreshLocalStatus()
@@ -683,11 +724,25 @@ async function ask(text: string): Promise<void> {
   } catch (error) {
     console.error(error)
     setMood('error')
-    say(config.provider === 'local' ? '本地模型没跑起来。检查 GGUF、引擎和显存设置。' : 'DeepSeek 没接通。检查 key、网络，或者模型名。')
+    const fallback = config.provider === 'local' ? '本地模型没跑起来。检查 GGUF、引擎和显存设置。' : '云端接口没接通。检查 key、网络，或者模型名。'
+    say(readableIpcError(error) || fallback)
+    // 发送失败：撤回刚才那句，并把原文放回输入框，方便改完设置后直接重发
+    if (messages.at(-1) === userMessage) {
+      messages.pop()
+      await persist()
+    }
+    if (simModal.open) simPrompt.value = text
+    else promptInput.value = text
   } finally {
     setBusy(false)
     promptInput.focus()
   }
+}
+
+function readableIpcError(error: unknown): string {
+  if (!(error instanceof Error)) return ''
+  // ipcRenderer.invoke 会把主进程异常包装成 "Error invoking remote method 'x': Error: 原因"
+  return error.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '').trim()
 }
 
 function openSettings(): void {
@@ -704,6 +759,21 @@ function openDevMode(): void {
   devAffinityNumber.value = String(config.affinity)
   devAffinityValue.textContent = String(config.affinity)
   if (!devModal.open) devModal.showModal()
+}
+
+function parseDirList(text: string): string[] {
+  return text
+    .split(/\r?\n|;/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+async function openFolder(key: WorkspaceDirKey): Promise<void> {
+  const error = await window.pet.openFolder(key)
+  if (error) {
+    settingsStatus.textContent = `打开目录失败：${error}`
+    settingsStatus.dataset.kind = 'error'
+  }
 }
 
 async function saveSettings(): Promise<void> {
@@ -723,6 +793,7 @@ async function saveSettings(): Promise<void> {
     temperature: Number(temperatureInput.value),
     maxTokens: Number(maxTokensInput.value),
     petScale: Number(petScaleInput.value),
+    alwaysOnTop: alwaysOnTopInput.checked,
     characterCard,
     local: {
       modelPath: localModelSelect.value,
@@ -735,12 +806,18 @@ async function saveSettings(): Promise<void> {
       useMmap: localUseMmap.checked,
       useMlock: localUseMlock.checked,
       allowSharedMemory: localSharedMemory.checked,
-      kvCacheType: localKvCache.value as LocalSettings['kvCacheType']
+      kvCacheType: localKvCache.value as LocalSettings['kvCacheType'],
+      extraModelDirs: parseDirList(localExtraDirs.value)
     }
   })
 
   apiKeyInput.value = ''
   applyConfig(next)
+  await refreshLocalModels()
+  // 新加的目录里扫到了模型、但之前还没选过模型时，自动记住列表里的第一个
+  if (!config.local.modelPath && localModelSelect.value) {
+    applyConfig(await window.pet.saveConfig({ local: { modelPath: localModelSelect.value } }))
+  }
   settingsStatus.textContent = '已保存'
   settingsStatus.dataset.kind = 'ok'
   say(`${config.characterCard.name} 的设置已经更新。`)
@@ -893,6 +970,33 @@ importLocalModelButton.addEventListener('click', async () => {
   settingsStatus.dataset.kind = 'ok'
 })
 
+openCardFolder.addEventListener('click', () => {
+  void openFolder('characterCards')
+})
+
+openModelFolder.addEventListener('click', () => {
+  void openFolder('models')
+})
+
+exportHistory.addEventListener('click', async () => {
+  const result = await window.pet.exportChat()
+  say(result.message)
+})
+
+openChatFolder.addEventListener('click', () => {
+  void openFolder('chats')
+})
+
+addModelDir.addEventListener('click', async () => {
+  const dir = await window.pet.pickModelDirectory()
+  if (!dir) return
+  const dirs = parseDirList(localExtraDirs.value)
+  if (!dirs.includes(dir)) dirs.push(dir)
+  localExtraDirs.value = dirs.join('\n')
+  settingsStatus.textContent = '已添加目录，点“保存”后扫描'
+  settingsStatus.dataset.kind = 'ok'
+})
+
 unloadLocalModel.addEventListener('click', async () => {
   await window.pet.unloadLocalModel()
   await refreshLocalStatus()
@@ -931,6 +1035,10 @@ generateStory.addEventListener('click', async () => {
     storyContextInput.value = story
     const next = await window.pet.saveConfig({ interactionMode: 'simulation', storyContext: story })
     applyConfig(next)
+  } catch (error) {
+    console.error(error)
+    setMood('error')
+    say(readableIpcError(error) || '剧情生成失败，检查模型设置后再试。')
   } finally {
     generateStory.disabled = false
     generateStory.textContent = oldText
@@ -1027,6 +1135,18 @@ clearMemory.addEventListener('click', async () => {
   say('记忆清空。现在我们重新开始。')
 })
 
+hideWindow.addEventListener('click', () => {
+  window.pet.hide()
+})
+
+window.pet.onOpenSettings(() => {
+  openSettings()
+})
+
+window.pet.onConfigChanged(async () => {
+  applyConfig(await window.pet.getConfig())
+})
+
 closeWindow.addEventListener('click', () => {
   window.pet.close()
 })
@@ -1053,10 +1173,11 @@ devForm.addEventListener('submit', (event) => {
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    const hadPanel = settingsModal.open || simModal.open
     if (settingsModal.open) settingsModal.close()
     if (devModal.open) devModal.close()
     if (simModal.open) simModal.close()
-    window.pet.restorePetWindow()
+    if (hadPanel) window.pet.restorePetWindow()
     if (historyPanel.classList.contains('open')) historyPanel.classList.remove('open')
     promptInput.blur()
   }

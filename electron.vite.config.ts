@@ -4,11 +4,13 @@ import { resolve } from 'node:path'
 export default defineConfig({
   main: {
     build: {
-      lib: {
-        entry: resolve(__dirname, 'electron/main.ts')
-      },
       rollupOptions: {
-        external: ['electron']
+        external: ['electron', 'node-llama-cpp'],
+        input: {
+          main: resolve(__dirname, 'electron/main.ts'),
+          // 本地 GGUF 推理在独立的 utilityProcess 里运行
+          'llm-worker': resolve(__dirname, 'electron/llm-worker.ts')
+        }
       }
     }
   },

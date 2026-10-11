@@ -65,8 +65,17 @@ textarea {
   line-height: 1.45;
   font-size: 14px;
   word-break: break-word;
+  white-space: pre-wrap;
   -webkit-app-region: no-drag;
   backdrop-filter: blur(10px);
+}
+
+.bubble-text {
+  /* 角色卡开场白可能很长（导入的卡常有上千字），限制高度并允许滚动，避免盖住立绘和工具栏 */
+  max-height: min(42vh, calc(100vh - 230px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .bubble::after {
@@ -300,8 +309,13 @@ textarea {
 }
 
 .panel-header {
+  gap: 6px;
   padding: 10px 10px 8px;
   border-bottom: 1px solid rgba(18, 29, 42, 0.08);
+}
+
+.panel-header strong {
+  margin-right: auto;
 }
 
 .history-list {
@@ -412,7 +426,7 @@ textarea {
   background-image: var(--character-bg);
   background-position: center;
   background-size: cover;
-  opacity: 0.16;
+  opacity: 0.42;
   filter: saturate(0.96);
 }
 
@@ -421,7 +435,8 @@ textarea {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.82));
+  /* 左侧（台词编辑区）保持高对比，右侧透出更多角色立绘 */
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.55));
 }
 
 .settings-section[hidden] {
@@ -456,6 +471,7 @@ textarea {
 
 .settings-grid input,
 .settings-grid select,
+.model-picker select,
 .number-field {
   height: 34px;
   padding: 6px 9px;
@@ -474,7 +490,25 @@ textarea {
 }
 
 .character-source-section .model-picker {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+#local-section .model-picker {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.card-editor.dir-editor textarea {
+  min-height: 58px;
+  max-height: 120px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .hint-text {

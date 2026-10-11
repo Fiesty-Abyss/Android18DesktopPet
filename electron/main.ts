@@ -1,94 +1,28 @@
 import 'dotenv/config'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
 import { existsSync } from 'node:fs'
 import { appendFile, copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import Store from 'electron-store'
 import { is } from '@electron-toolkit/utils'
 import defaultCharacterCardData from '../characters/android18.card.json'
+import trayIconPath from '../assets/tray-icon.png?asset'
+import appIconPath from '../assets/icon.png?asset'
+import type {
+  CharacterCard,
+  CharacterCardInfo,
+  ChatMessage,
+  ConfigPatch,
+  LocalModelInfo,
+  LocalSettings,
+  LocalStatus,
+  PetConfig,
+  RendererConfig,
+  WorkspaceDirKey
+} from '../shared/types'
+import type { LlmChatTurn } from '../shared/llm-protocol'
+import { LocalLlmClient } from './llm-client'
 
-type ChatMessage = {
-  role: 'user' | 'assistant'
-  content: string
-}
-
-type CharacterCard = {
-  name: string
-  greeting: string
-  persona: string
-  speechStyle: string[]
-  behaviorRules: string[]
-  systemPrompt: string
-}
-
-type CharacterCardInfo = {
-  id: string
-  name: string
-  baseName: string
-  jsonPath: string
-  pngPath: string
-  hasJson: boolean
-  hasPng: boolean
-  source: 'builtin' | 'library'
-}
-
-type LocalSettings = {
-  modelPath: string
-  gpuBackend: 'auto' | 'cuda' | 'vulkan' | 'cpu'
-  vramMode: 'auto' | 'high' | 'medium' | 'low'
-  contextSize: number
-  batchSize: number
-  threads: number
-  flashAttention: boolean
-  useMmap: boolean
-  useMlock: boolean
-  allowSharedMemory: boolean
-  kvCacheType: 'F16' | 'Q8_0' | 'Q4_0'
-}
-
-type PetConfig = {
-  interactionMode: 'pet' | 'simulation'
-  storyContext: string
-  characterId: string
-  characterPngPath: string
-  provider: 'api' | 'local'
-  baseUrl: string
-  apiKey: string
-  model: string
-  temperature: number
-  maxTokens: number
-  characterCard: CharacterCard
-  modelImagePath: string
-  affinity: number
-  petScale: number
-  local: LocalSettings
-}
-
-type RendererConfig = Omit<PetConfig, 'apiKey'> & {
-  apiKeySet: boolean
-  memoryKey: string
-}
-
-type ConfigPatch = Partial<Omit<PetConfig, 'apiKey' | 'characterCard' | 'local'>> & {
-  apiKey?: string
-  characterCard?: Partial<CharacterCard>
-  local?: Partial<LocalSettings>
-}
-
-type LocalModelInfo = {
-  name: string
-  path: string
-  size: number
-  source: 'library' | 'external'
-}
-
-type LocalRuntime = {
-  key: string
-  llama: any
-  model: any
-  context: any
-  session: any
-}
 
 const defaultCharacterCard = defaultCharacterCardData as CharacterCard
 
@@ -103,7 +37,9 @@ const defaultLocalSettings: LocalSettings = {
   useMmap: true,
   useMlock: false,
   allowSharedMemory: false,
-  kvCacheType: 'F16'
+  kvCacheType: 'F16',
+  // 兼容旧版本：Windows 下默认继续扫描 E:\mod，其他系统默认不扫描额外目录
+  extraModelDirs: process.platform === 'win32' ? ['E:\\mod'] : []
 }
 
 const defaultConfig: PetConfig = {
@@ -121,18 +57,24 @@ const defaultConfig: PetConfig = {
   modelImagePath: '',
   affinity: 0,
   petScale: 1,
+  alwaysOnTop: true,
   local: defaultLocalSettings
 }
 
+type WindowPosition = { x: number; y: number }
+
 const store = new Store<{
+  windowPosition?: WindowPosition
   config?: Partial<PetConfig>
   messages?: ChatMessage[]
   memories?: Record<string, ChatMessage[]>
 }>()
 
 let mainWindow: BrowserWindow | null = null
-let localRuntime: LocalRuntime | null = null
+const localLlm = new LocalLlmClient()
 let panelExpanded = false
+let tray: Tray | null = null
+let savePositionTimer: NodeJS.Timeout | undefined
 
 function appRootDir(): string {
   if (is.dev) return process.cwd()
@@ -150,7 +92,7 @@ function rootPath(...parts: string[]): string {
   return join(appRootDir(), ...parts)
 }
 
-function workspaceDirs(): Record<'models' | 'plugins' | 'chats' | 'cache' | 'characterCards', string> {
+function workspaceDirs(): Record<WorkspaceDirKey, string> {
   return {
     models: rootPath('models'),
     plugins: rootPath('plugins'),
@@ -187,8 +129,23 @@ function mergeLocalSettings(local?: Partial<LocalSettings>): LocalSettings {
     useMmap: local?.useMmap ?? defaultLocalSettings.useMmap,
     useMlock: local?.useMlock ?? defaultLocalSettings.useMlock,
     allowSharedMemory: local?.allowSharedMemory ?? defaultLocalSettings.allowSharedMemory,
-    kvCacheType: local?.kvCacheType || defaultLocalSettings.kvCacheType
+    kvCacheType: local?.kvCacheType || defaultLocalSettings.kvCacheType,
+    extraModelDirs: normalizeDirList(local?.extraModelDirs, defaultLocalSettings.extraModelDirs)
   }
+}
+
+function normalizeDirList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return [...fallback]
+  const seen = new Set<string>()
+  const dirs: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const dir = item.trim()
+    if (!dir || seen.has(dir)) continue
+    seen.add(dir)
+    dirs.push(dir)
+  }
+  return dirs.slice(0, 16)
 }
 
 function stableHash(text: string): string {
@@ -255,6 +212,7 @@ function saveConfig(patch: ConfigPatch): RendererConfig {
     maxTokens: Math.round(clampNumber(patch.maxTokens, 64, 4096, current.maxTokens)),
     affinity: Math.round(clampNumber(patch.affinity, -100, 100, current.affinity)),
     petScale: clampNumber(patch.petScale, 0.7, 1.45, current.petScale),
+    alwaysOnTop: typeof patch.alwaysOnTop === 'boolean' ? patch.alwaysOnTop : current.alwaysOnTop,
     characterId: typeof patch.characterId === 'string' ? patch.characterId : current.characterId,
     characterPngPath: typeof patch.characterPngPath === 'string' ? patch.characterPngPath : current.characterPngPath,
     characterCard: mergeCharacterCard(patch.characterCard || current.characterCard),
@@ -264,6 +222,10 @@ function saveConfig(patch: ConfigPatch): RendererConfig {
   store.set('config', next)
   if (Object.prototype.hasOwnProperty.call(patch, 'petScale') && !panelExpanded) {
     applyWindowScale(next.petScale)
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'alwaysOnTop')) {
+    mainWindow?.setAlwaysOnTop(next.alwaysOnTop)
+    refreshTrayMenu()
   }
   return toRendererConfig(next)
 }
@@ -309,9 +271,16 @@ function buildSystemPrompt(config: PetConfig): string {
     .join('\n')
 }
 
-function stripRoleplayArtifacts(text: string): string {
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function stripRoleplayArtifacts(text: string, characterName = ''): string {
+  const names = ['人造人18号', '18号', 'Android\\s*18', 'assistant', 'AI']
+  if (characterName.trim()) names.unshift(escapeRegExp(characterName.trim()))
+  const speakerPrefix = new RegExp(`^(?:${names.join('|')})\\s*[:：]\\s*`, 'i')
   return text
-    .replace(/^(人造人18号|18号|Android\s*18|assistant|AI)\s*[:：]\s*/i, '')
+    .replace(speakerPrefix, '')
     .replace(/作为(?:一个)?(?:AI|人工智能|语言模型|模型|程序)[^。！？\n]*(?:[。！？]|\n|$)/g, '')
     .replace(/我(?:是|只是)(?:一个)?(?:AI|人工智能|语言模型|模型|程序)[^。！？\n]*(?:[。！？]|\n|$)/g, '')
     .trim()
@@ -364,7 +333,7 @@ function trimRepeatedTail(text: string): string {
 
 function postProcessAnswer(answer: string, config: PetConfig): string {
   const limit = config.interactionMode === 'simulation' ? 900 : 480
-  let text = stripRoleplayArtifacts(answer)
+  let text = stripRoleplayArtifacts(answer, config.characterCard.name)
   text = trimRepeatedChunks(text)
   text = trimRepeatedTail(text)
   if (text.length > limit) {
@@ -380,12 +349,130 @@ function applyWindowScale(scale = getConfig().petScale): void {
   const height = Math.round(650 * scale)
   mainWindow.setMinimumSize(Math.round(340 * scale), Math.round(500 * scale))
   mainWindow.setSize(width, height)
+  keepWindowOnScreen()
+}
+
+/** 窗口尺寸变化（展开设置面板、切换显示器）后，把窗口拉回当前显示器的可见区域 */
+function keepWindowOnScreen(): void {
+  if (!mainWindow) return
+  const bounds = mainWindow.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  const x = Math.min(Math.max(bounds.x, area.x), area.x + Math.max(0, area.width - bounds.width))
+  const y = Math.min(Math.max(bounds.y, area.y), area.y + Math.max(0, area.height - bounds.height))
+  if (x !== bounds.x || y !== bounds.y) mainWindow.setPosition(x, y)
+}
+
+function savedWindowPosition(width: number, height: number): WindowPosition | undefined {
+  const saved = store.get('windowPosition')
+  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return undefined
+  // 显示器拔掉或分辨率变化后，旧坐标可能落在屏幕外，这时退回默认位置
+  const visible = screen.getAllDisplays().some(({ workArea }) => {
+    return (
+      saved.x + width > workArea.x + 40 &&
+      saved.x < workArea.x + workArea.width - 40 &&
+      saved.y >= workArea.y - 20 &&
+      saved.y < workArea.y + workArea.height - 60
+    )
+  })
+  return visible ? saved : undefined
+}
+
+function rememberWindowPosition(): void {
+  if (!mainWindow || panelExpanded) return
+  clearTimeout(savePositionTimer)
+  savePositionTimer = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || panelExpanded) return
+    const [x, y] = mainWindow.getPosition()
+    store.set('windowPosition', { x, y })
+  }, 400)
+}
+
+function resetWindowPosition(): void {
+  if (!mainWindow) return
+  store.delete('windowPosition')
+  const area = screen.getPrimaryDisplay().workArea
+  const [width, height] = mainWindow.getSize()
+  mainWindow.setPosition(area.x + area.width - width - 40, area.y + area.height - height - 20)
+  showPetWindow()
+}
+
+function showPetWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  refreshTrayMenu()
+}
+
+function togglePetWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    mainWindow.hide()
+    refreshTrayMenu()
+  } else {
+    showPetWindow()
+  }
+}
+
+function refreshTrayMenu(): void {
+  if (!tray) return
+  const config = getConfig()
+  const visible = Boolean(mainWindow?.isVisible() && !mainWindow?.isMinimized())
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: visible ? '隐藏桌宠' : '显示桌宠', click: togglePetWindow },
+      {
+        label: '打开设置',
+        click: () => {
+          showPetWindow()
+          mainWindow?.webContents.send('pet:open-settings')
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '始终置顶',
+        type: 'checkbox',
+        checked: config.alwaysOnTop,
+        click: (item) => {
+          saveConfig({ alwaysOnTop: item.checked })
+          mainWindow?.webContents.send('pet:config-changed')
+        }
+      },
+      { label: '重置窗口位置', click: resetWindowPosition },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => app.quit()
+      }
+    ])
+  )
+}
+
+function createTray(): void {
+  try {
+    const icon = nativeImage.createFromPath(trayIconPath)
+    tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 20, height: 20 }))
+    tray.setToolTip(`${getConfig().characterCard.name} · 桌宠`)
+    tray.on('click', togglePetWindow)
+    refreshTrayMenu()
+  } catch (error) {
+    // 部分 Linux 桌面没有系统托盘，失败时不影响桌宠本体
+    console.warn('[tray] unavailable', error)
+    tray = null
+  }
 }
 
 function createWindow(): void {
+  const config = getConfig()
+  const initialWidth = Math.round(430 * config.petScale)
+  const initialHeight = Math.round(650 * config.petScale)
+  const position = savedWindowPosition(initialWidth, initialHeight)
   mainWindow = new BrowserWindow({
-    width: 430,
-    height: 650,
+    width: initialWidth,
+    height: initialHeight,
+    ...(position || {}),
+    icon: appIconPath,
+    title: 'Android 18 Desktop Pet',
     minWidth: 360,
     minHeight: 520,
     frame: false,
@@ -393,7 +480,7 @@ function createWindow(): void {
     backgroundColor: '#00000000',
     hasShadow: false,
     resizable: true,
-    alwaysOnTop: true,
+    alwaysOnTop: config.alwaysOnTop,
     skipTaskbar: false,
     show: false,
     webPreferences: {
@@ -409,6 +496,20 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  // 'moved' 只在 Windows/macOS 触发，Linux 只有 'move'，这里统一用 'move' + 防抖
+  mainWindow.on('move', rememberWindowPosition)
+  // 立绘区域是可拖拽区域（-webkit-app-region: drag），在 Windows/Linux 上右键会弹出系统窗口菜单，
+  // 渲染进程收不到 contextmenu 事件。这里拦截系统菜单，改为打开桌宠设置。
+  mainWindow.on('system-context-menu', (event) => {
+    event.preventDefault()
+    mainWindow?.webContents.send('pet:open-settings')
+  })
+  mainWindow.on('show', refreshTrayMenu)
+  mainWindow.on('hide', refreshTrayMenu)
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -420,34 +521,54 @@ function chatEndpoint(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/chat/completions`
 }
 
+function cloudErrorHint(status: number): string {
+  if (status === 400) return '请求参数不被接受（400），检查模型名和回复长度。'
+  if (status === 401) return 'API Key 无效（401），去设置里重新填写。'
+  if (status === 402) return '账户余额不足（402），充值后再试。'
+  if (status === 404) return '接口地址或模型不存在（404），检查 Base URL 和模型名。'
+  if (status === 422) return '参数格式错误（422），检查温度和回复长度。'
+  if (status === 429) return '请求太频繁或额度受限（429），稍后再试。'
+  if (status >= 500) return `服务端暂时不可用（${status}），过一会儿再试。`
+  return `云端接口返回错误（${status}）。`
+}
+
 async function askCloudApi(history: ChatMessage[], config = getConfig()): Promise<string> {
   if (!config.apiKey) {
-    return '还没绑定 DeepSeek API key。右键我，打开设置，把 key 填进去。'
+    // 用异常返回提示，避免这句配置提示被当成角色回复写进聊天记忆
+    throw new Error('还没绑定 API Key。右键我打开设置，把 key 填进去。')
   }
 
-  const response = await fetch(chatEndpoint(config.baseUrl), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildSystemPrompt(config)
-        },
-        ...history.slice(-14)
-      ],
-      temperature: config.temperature,
-      max_tokens: config.maxTokens
+  let response: Response
+  try {
+    response = await fetch(chatEndpoint(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: 'system',
+            content: buildSystemPrompt(config)
+          },
+          ...history.slice(-14)
+        ],
+        temperature: config.temperature,
+        max_tokens: config.maxTokens
+      }),
+      signal: AbortSignal.timeout(90_000)
     })
-  })
+  } catch (error) {
+    console.error('[cloud-api] request failed', error)
+    throw new Error('连不上云端接口：检查网络、代理或 Base URL。')
+  }
 
   if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(`DeepSeek API ${response.status}: ${detail.slice(0, 300)}`)
+    const detail = await response.text().catch(() => '')
+    console.error(`[cloud-api] ${response.status}: ${detail.slice(0, 300)}`)
+    throw new Error(cloudErrorHint(response.status))
   }
 
   const data = (await response.json()) as {
@@ -456,71 +577,17 @@ async function askCloudApi(history: ChatMessage[], config = getConfig()): Promis
   return postProcessAnswer(data.choices?.[0]?.message?.content?.trim() || '我刚刚短路了一下。再说一遍？', config)
 }
 
-async function loadNodeLlama(): Promise<any> {
-  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>
-  return dynamicImport('node-llama-cpp')
-}
-
-function gpuOption(local: LocalSettings): 'auto' | 'cuda' | 'vulkan' | false {
-  if (local.gpuBackend === 'cpu') return false
-  return local.gpuBackend
-}
-
-function vramPadding(local: LocalSettings): number | undefined {
-  if (local.gpuBackend === 'cpu') return undefined
-  if (local.allowSharedMemory) return 256 * 1024 * 1024
-  if (local.vramMode === 'high') return 512 * 1024 * 1024
-  if (local.vramMode === 'low') return 1536 * 1024 * 1024
-  return 1024 * 1024 * 1024
-}
-
-function gpuLayersOption(local: LocalSettings): unknown {
-  if (local.gpuBackend === 'cpu' || local.vramMode === 'low') return 0
-  if (local.vramMode === 'high') return 'max'
-  if (local.vramMode === 'medium') {
-    return {
-      min: 8,
-      max: 28,
-      fitContext: { contextSize: local.contextSize }
-    }
-  }
-  return {
-    min: 0,
-    max: 999,
-    fitContext: { contextSize: local.contextSize }
-  }
-}
-
-function localRuntimeKey(config: PetConfig): string {
-  const local = config.local
-  return JSON.stringify({
-    modelPath: local.modelPath,
-    gpuBackend: local.gpuBackend,
-    vramMode: local.vramMode,
-    contextSize: local.contextSize,
-    batchSize: local.batchSize,
-    threads: local.threads,
-    flashAttention: local.flashAttention,
-    useMmap: local.useMmap,
-    useMlock: local.useMlock,
-    allowSharedMemory: local.allowSharedMemory,
-    kvCacheType: local.kvCacheType
+function toLlamaChatTurns(history: ChatMessage[]): LlmChatTurn[] {
+  // 最后一条是本次要问的话，单独作为 prompt 传，不放进历史
+  return history.slice(-14, -1).map((message): LlmChatTurn => {
+    if (message.role === 'user') return { type: 'user', text: message.content }
+    return { type: 'model', response: [message.content] }
   })
 }
 
-async function disposeLocalRuntime(): Promise<void> {
-  if (!localRuntime) return
-  try {
-    localRuntime.session?.dispose?.({ disposeSequence: true })
-    localRuntime.context?.dispose?.()
-    localRuntime.model?.dispose?.()
-    localRuntime.llama?.dispose?.()
-  } finally {
-    localRuntime = null
-  }
-}
-
-async function ensureLocalRuntime(config = getConfig()): Promise<LocalRuntime> {
+async function askLocalModel(history: ChatMessage[], config = getConfig()): Promise<string> {
+  const prompt = [...history].reverse().find((message) => message.role === 'user')?.content?.trim()
+  if (!prompt) return '你刚刚什么都没说。'
   if (!config.local.modelPath) {
     throw new Error('还没有选择 GGUF 模型。右键打开设置，切到本地 GGUF 后选择模型。')
   }
@@ -528,86 +595,16 @@ async function ensureLocalRuntime(config = getConfig()): Promise<LocalRuntime> {
     throw new Error(`模型文件不存在：${config.local.modelPath}`)
   }
 
-  const key = localRuntimeKey(config)
-  if (localRuntime?.key === key) return localRuntime
-
-  await disposeLocalRuntime()
-
-  const { getLlama, LlamaChatSession } = await loadNodeLlama()
-  const llama = await getLlama({
-    gpu: gpuOption(config.local),
-    vramPadding: vramPadding(config.local)
-  })
-
-  const model = await llama.loadModel({
-    modelPath: config.local.modelPath,
-    gpuLayers: gpuLayersOption(config.local),
-    useMmap: config.local.useMmap,
-    useMlock: config.local.useMlock,
-    defaultContextFlashAttention: config.local.flashAttention,
-    ignoreMemorySafetyChecks: config.local.allowSharedMemory,
-    experimentalDefaultContextKvCacheKeyType: config.local.kvCacheType,
-    experimentalDefaultContextKvCacheValueType: config.local.kvCacheType
-  })
-
-  const context = await model.createContext({
-    contextSize: config.local.contextSize,
-    batchSize: config.local.batchSize,
-    threads: config.local.threads === 0 ? undefined : config.local.threads,
-    flashAttention: config.local.flashAttention,
-    ignoreMemorySafetyChecks: config.local.allowSharedMemory,
-    failedCreationRemedy: { retries: 4 }
-  })
-
-  const session = new LlamaChatSession({
-    contextSequence: context.getSequence(),
-    forceAddSystemPrompt: true
-  })
-
-  localRuntime = { key, llama, model, context, session }
-  return localRuntime
-}
-
-function toLlamaChatHistory(history: ChatMessage[], config = getConfig()): any[] {
-  const prior = history.slice(-14, -1).map((message) => {
-    if (message.role === 'user') return { type: 'user', text: message.content }
-    return { type: 'model', response: [message.content] }
-  })
-  return [{ type: 'system', text: buildSystemPrompt(config) }, ...prior]
-}
-
-async function askLocalModel(history: ChatMessage[], config = getConfig()): Promise<string> {
-  const prompt = [...history].reverse().find((message) => message.role === 'user')?.content?.trim()
-  if (!prompt) return '你刚刚什么都没说。'
-
-  const runtime = await ensureLocalRuntime(config)
-  runtime.session.setChatHistory(toLlamaChatHistory(history, config))
-
-  const answer = await runtime.session.prompt(prompt, {
+  const answer = await localLlm.prompt({
+    local: config.local,
+    systemPrompt: buildSystemPrompt(config),
+    priorTurns: toLlamaChatTurns(history),
+    prompt,
     maxTokens: Math.min(config.maxTokens, config.interactionMode === 'simulation' ? 520 : 260),
-    temperature: config.temperature,
-    topK: 40,
-    topP: 0.92,
-    minP: 0.06,
-    repeatPenalty: {
-      lastTokens: 192,
-      penalty: 1.18,
-      frequencyPenalty: 0.08,
-      presencePenalty: 0.08,
-      penalizeNewLine: false
-    },
-    dryRepeatPenalty: {
-      strength: 0.82,
-      base: 1.9,
-      allowedLength: 2,
-      lastTokens: 512,
-      sequenceBreakers: ['\n', '。', '！', '？', '，']
-    },
-    trimWhitespaceSuffix: true,
-    customStopTriggers: ['我们是独立的生物，我们是独立的生物', '我是独立的生物，我是独立的生物']
+    temperature: config.temperature
   })
 
-  return postProcessAnswer(String(answer).trim() || '本地模型刚才沉默了。再问一次？', config)
+  return postProcessAnswer(answer.trim() || '本地模型刚才沉默了。再问一次？', config)
 }
 
 async function askAssistant(history: ChatMessage[]): Promise<string> {
@@ -833,16 +830,34 @@ async function selectModelImage(): Promise<RendererConfig> {
   return saveConfig({ modelImagePath: destination })
 }
 
-async function scanDirForModels(dir: string, source: LocalModelInfo['source']): Promise<LocalModelInfo[]> {
+async function scanDirForModels(
+  dir: string,
+  source: LocalModelInfo['source'],
+  depth = 2
+): Promise<LocalModelInfo[]> {
   if (!existsSync(dir)) return []
-  const entries = await readdir(dir, { withFileTypes: true })
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
   const models: LocalModelInfo[] = []
 
   for (const entry of entries) {
-    if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.gguf') continue
     const path = join(dir, entry.name)
-    const info = await stat(path)
-    models.push({ name: entry.name, path, size: info.size, source })
+    // 支持“模型名/xxx.gguf”这种从 Hugging Face 下载后常见的子目录结构
+    if (entry.isDirectory() && depth > 1 && !entry.name.startsWith('.')) {
+      models.push(...(await scanDirForModels(path, source, depth - 1)))
+      continue
+    }
+    if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.gguf') continue
+    try {
+      const info = await stat(path)
+      models.push({ name: entry.name, path, size: info.size, source, dir })
+    } catch {
+      // 文件被占用或权限不足时跳过
+    }
   }
 
   return models
@@ -850,13 +865,34 @@ async function scanDirForModels(dir: string, source: LocalModelInfo['source']): 
 
 async function scanLocalModels(): Promise<LocalModelInfo[]> {
   await ensureWorkspaceFolders()
-  const dirs = workspaceDirs()
-  const models = [
-    ...(await scanDirForModels(dirs.models, 'library')),
-    ...(await scanDirForModels('E:\\mod', 'external'))
+  const libraryDir = workspaceDirs().models
+  const extraDirs = getConfig().local.extraModelDirs.filter((dir) => resolve(dir) !== resolve(libraryDir))
+  const found = [
+    ...(await scanDirForModels(libraryDir, 'library')),
+    ...(await Promise.all(extraDirs.map((dir) => scanDirForModels(dir, 'external')))).flat()
   ]
 
-  return models.sort((a, b) => a.name.localeCompare(b.name))
+  const unique = new Map<string, LocalModelInfo>()
+  for (const model of found) unique.set(resolve(model.path), model)
+  return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+async function pickModelDirectory(): Promise<string> {
+  if (!mainWindow) return ''
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择额外的 GGUF 模型目录',
+    properties: ['openDirectory']
+  })
+  if (result.canceled || result.filePaths.length === 0) return ''
+  return result.filePaths[0]
+}
+
+async function openWorkspaceFolder(key: WorkspaceDirKey): Promise<string> {
+  const dirs = workspaceDirs()
+  const target = dirs[key]
+  if (!target) return '未知目录'
+  await mkdir(target, { recursive: true })
+  return shell.openPath(target)
 }
 
 async function importLocalModel(): Promise<LocalModelInfo[]> {
@@ -881,30 +917,21 @@ async function importLocalModel(): Promise<LocalModelInfo[]> {
   return scanLocalModels()
 }
 
-async function getLocalStatus(): Promise<{
-  loaded: boolean
-  modelPath: string
-  supportedGpuTypes: Array<string | false>
-  rootDirs: Record<'models' | 'plugins' | 'chats' | 'cache' | 'characterCards', string>
-}> {
-  let supportedGpuTypes: Array<string | false> = []
-  try {
-    const { getLlamaGpuTypes } = await loadNodeLlama()
-    supportedGpuTypes = await getLlamaGpuTypes()
-  } catch {
-    supportedGpuTypes = []
-  }
-
+async function getLocalStatus(): Promise<LocalStatus> {
   return {
-    loaded: Boolean(localRuntime),
-    modelPath: localRuntime ? getConfig().local.modelPath : '',
-    supportedGpuTypes,
+    loaded: localLlm.isLoaded,
+    modelPath: localLlm.isLoaded ? getConfig().local.modelPath : '',
+    supportedGpuTypes: await localLlm.gpuTypes(),
     rootDirs: workspaceDirs()
   }
 }
 
-function dayStamp(): string {
-  return new Date().toISOString().slice(0, 10)
+function dayStamp(date = new Date()): string {
+  // 按本地日期切分日志，避免 UTC 跨日导致晚上的聊天写进“明天”的文件
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function currentMessages(config = getConfig()): ChatMessage[] {
@@ -956,6 +983,53 @@ async function writeChatSnapshot(messages: ChatMessage[], config = getConfig()):
   }
 }
 
+function chatToMarkdown(messages: ChatMessage[], config: PetConfig): string {
+  const modelName = config.provider === 'local' ? basename(config.local.modelPath || 'local-gguf') : config.model
+  const lines = [
+    `# 与 ${config.characterCard.name} 的聊天记录`,
+    '',
+    `- 导出时间：${new Date().toLocaleString()}`,
+    `- 交互模式：${config.interactionMode === 'simulation' ? '对话模拟' : '桌宠'}`,
+    `- 推理来源：${config.provider === 'local' ? '本地 GGUF' : '云端 API'}（${modelName}）`,
+    `- 好感度：${config.affinity}`,
+    ''
+  ]
+  if (config.interactionMode === 'simulation' && config.storyContext.trim()) {
+    lines.push('## 剧情', '', config.storyContext.trim(), '')
+  }
+  lines.push('## 对话', '')
+  for (const message of messages) {
+    const speaker = message.role === 'user' ? '你' : config.characterCard.name
+    lines.push(`**${speaker}：** ${message.content.replace(/\n/g, '  \n')}`, '')
+  }
+  return lines.join('\n')
+}
+
+async function exportCurrentChat(): Promise<{ ok: boolean; path?: string; message: string }> {
+  const config = getConfig()
+  const messages = currentMessages(config)
+  if (messages.length === 0) return { ok: false, message: '当前没有可以导出的聊天记录。' }
+  if (!mainWindow) return { ok: false, message: '窗口未就绪。' }
+
+  const defaultName = `${safeFilePart(config.characterCard.name)}_${dayStamp()}.md`
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出聊天记录',
+    defaultPath: join(workspaceDirs().chats, defaultName),
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'JSON', extensions: ['json'] }
+    ]
+  })
+  if (result.canceled || !result.filePath) return { ok: false, message: '已取消导出。' }
+
+  const content =
+    extname(result.filePath).toLowerCase() === '.json'
+      ? JSON.stringify({ characterName: config.characterCard.name, exportedAt: new Date().toISOString(), messages }, null, 2)
+      : chatToMarkdown(messages, config)
+  await writeFile(result.filePath, content, 'utf8')
+  return { ok: true, path: result.filePath, message: `已导出 ${messages.length} 条消息。` }
+}
+
 async function setCurrentMessages(messages: ChatMessage[], config = getConfig()): Promise<void> {
   const key = chatMemoryKey(config)
   const memories = store.get('memories', {})
@@ -965,9 +1039,20 @@ async function setCurrentMessages(messages: ChatMessage[], config = getConfig())
   await writeChatSnapshot(saved, config)
 }
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    showPetWindow()
+  })
+}
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return
   await ensureWorkspaceFolders()
   createWindow()
+  createTray()
 
   ipcMain.handle('pet:chat', async (_event, history: ChatMessage[]) => {
     return askAssistant(history)
@@ -983,6 +1068,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('pet:clear-memory', async () => {
     await setCurrentMessages([])
+  })
+
+  ipcMain.handle('pet:export-chat', () => {
+    return exportCurrentChat()
   })
 
   ipcMain.handle('pet:get-config', () => {
@@ -1025,12 +1114,20 @@ app.whenReady().then(async () => {
     return importLocalModel()
   })
 
+  ipcMain.handle('pet:pick-model-directory', () => {
+    return pickModelDirectory()
+  })
+
+  ipcMain.handle('pet:open-folder', (_event, key: WorkspaceDirKey) => {
+    return openWorkspaceFolder(key)
+  })
+
   ipcMain.handle('pet:get-local-status', () => {
     return getLocalStatus()
   })
 
   ipcMain.handle('pet:unload-local-model', async () => {
-    await disposeLocalRuntime()
+    await localLlm.unload()
     return getLocalStatus()
   })
 
@@ -1039,9 +1136,14 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.on('window:expand-panel', () => {
+    if (!mainWindow) return
     panelExpanded = true
-    mainWindow?.setMinimumSize(720, 620)
-    mainWindow?.setSize(960, 820)
+    const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+    const width = Math.min(960, area.width)
+    const height = Math.min(820, area.height)
+    mainWindow.setMinimumSize(Math.min(720, width), Math.min(620, height))
+    mainWindow.setSize(width, height)
+    keepWindowOnScreen()
   })
 
   ipcMain.on('window:restore-pet', () => {
@@ -1050,7 +1152,12 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.on('window:close', () => {
-    mainWindow?.close()
+    app.quit()
+  })
+
+  ipcMain.on('window:hide', () => {
+    if (tray) mainWindow?.hide()
+    else mainWindow?.minimize()
   })
 
   app.on('activate', () => {
@@ -1059,6 +1166,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', async () => {
-  await disposeLocalRuntime()
+  tray?.destroy()
+  tray = null
+  localLlm.dispose()
   if (process.platform !== 'darwin') app.quit()
 })

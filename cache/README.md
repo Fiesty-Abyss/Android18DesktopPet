@@ -1,3 +1,3 @@
-# Cache
+# 缓存
 
-Runtime cache files can live here.
+预留的运行时缓存目录，已在 `.gitignore` 中忽略。

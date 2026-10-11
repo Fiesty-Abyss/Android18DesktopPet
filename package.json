@@ -1,12 +1,13 @@
 {
   "name": "android-18-desktop-pet",
-  "version": "0.1.0",
-  "description": "A small transparent desktop pet with DeepSeek chat.",
+  "version": "0.2.0",
+  "description": "Electron 透明桌宠 + AI 对话：云端 API / 本地 GGUF、角色卡、好感度、对话模拟。",
   "main": "out/main/main.js",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "npm run build && node scripts/package-win.mjs",
     "dist:builder": "npm run build && electron-builder"
@@ -38,6 +39,30 @@
         "portable",
         "nsis"
       ]
+    },
+    "icon": "assets/icon.png",
+    "extraFiles": [
+      {
+        "from": "character-cards",
+        "to": "character-cards",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "models/README.md",
+        "to": "models/README.md"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }
